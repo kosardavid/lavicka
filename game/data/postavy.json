@@ -1,0 +1,47 @@
+{
+  "babicka_vlasta": {
+    "id": "babicka_vlasta",
+    "role": "Babička Vlasta",
+    "vek": 75,
+    "color": [200, 200, 200],
+    "vibe": "Milá, užívá si klid a vzpomíná na mládí. Mluví jemně a občas nostalgicky.",
+    "popis": "Starší paní v šátku",
+    "rod": "žena"
+  },
+  "manazer_petr": {
+    "id": "manazer_petr",
+    "role": "Manažer Petr",
+    "vek": 35,
+    "color": [50, 50, 150],
+    "vibe": "Ve stresu z práce, snaží se uvolnit. Mluví věcně, občas si povzdechne.",
+    "popis": "Muž v obleku",
+    "rod": "muž"
+  },
+  "rebelka_adela": {
+    "id": "rebelka_adela",
+    "role": "Rebelka Adéla",
+    "vek": 19,
+    "color": [200, 50, 50],
+    "vibe": "Ironická a stručná, venku je jí ale vlastně dobře. Často radši mlčí a myslí si svoje.",
+    "popis": "Mladá holka s barevnými vlasy",
+    "rod": "žena"
+  },
+  "delnik_franta": {
+    "id": "delnik_franta",
+    "role": "Dělník Franta",
+    "vek": 50,
+    "color": [50, 150, 50],
+    "vibe": "Právě skončil šichtu, bodrý a spokojený. Mluví jednoduše a přímo.",
+    "popis": "Chlap v montérkách",
+    "rod": "muž"
+  },
+  "bezdomovec_lojza": {
+    "id": "bezdomovec_lojza",
+    "role": "Bezdomovec Lojza",
+    "vek": 55,
+    "color": [150, 150, 50],
+    "vibe": "Klidný pozorovatel, trochu filosof z ulice. Mluví pomalu, občas trefně.",
+    "popis": "Starší muž s plnovousem",
+    "rod": "muž"
+  }
+}

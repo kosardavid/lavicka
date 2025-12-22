@@ -1,0 +1,304 @@
+{
+  "babicka_vlasta": {
+    "lide": {
+      "delnik_franta": {
+        "id": "delnik_franta",
+        "popis": "Chlap v montérkách",
+        "jmeno": "Franta",
+        "dojem": "Přátelský a pln vzpomínek na dobrodružství",
+        "temata": [
+          "pláž",
+          "vzpomínky",
+          "počasí"
+        ],
+        "fakta": [
+          "Měl nejlepší den na pláži s mírným větříkem a teplejším sluncem.",
+          "S kamarády běhal po pláži."
+        ],
+        "sila": 0.62,
+        "pocet_setkani": 1,
+        "posledni_setkani": "2025-12-22T12:12:17.366687",
+        "prvni_setkani": "2025-12-22T12:12:17.366687"
+      },
+      "manazer_petr": {
+        "id": "manazer_petr",
+        "popis": "Muž v obleku, elegantní a sebejistý",
+        "jmeno": "Manažer Petr",
+        "dojem": "Příjemný společník, uklidňující přítomnost",
+        "temata": [
+          "uklidňující prostředí",
+          "povídání",
+          "moře"
+        ],
+        "fakta": [
+          "Mluvil o uklidňujícím účinku místa",
+          "Působil sebejistě a přátelsky"
+        ],
+        "sila": 0.575,
+        "pocet_setkani": 1,
+        "posledni_setkani": "2025-12-22T12:14:11.225656",
+        "prvni_setkani": "2025-12-22T12:14:11.225656"
+      },
+      "rebelka_adela": {
+        "id": "rebelka_adela",
+        "popis": "Mladá holka s barevnými vlasy",
+        "jmeno": "Rebelka Adéla",
+        "dojem": "Přátelská a filozofická, má unikátní pohled na život.",
+        "temata": [
+          "reflexe",
+          "moře",
+          "klid"
+        ],
+        "fakta": [
+          "Mluvila o klidu a tichu moře.",
+          "Věří, že moře nás učí trpělivosti."
+        ],
+        "sila": 0.575,
+        "pocet_setkani": 1,
+        "posledni_setkani": "2025-12-22T12:23:43.396157",
+        "prvni_setkani": "2025-12-22T12:23:43.396157"
+      }
+    }
+  },
+  "rebelka_adela": {
+    "lide": {
+      "bezdomovec_lojza": {
+        "id": "bezdomovec_lojza",
+        "popis": "Starší muž s plnovousem",
+        "jmeno": "Bezdomovec Lojza",
+        "dojem": "Přátelský a otevřený, mluví optimisticky.",
+        "temata": [
+          "pohovor",
+          "moře",
+          "počasí"
+        ],
+        "fakta": [
+          "Odpověď na pohovor",
+          "Doufal v teplé moře"
+        ],
+        "sila": 0.575,
+        "pocet_setkani": 1,
+        "posledni_setkani": "2025-12-22T12:18:13.269957",
+        "prvni_setkani": "2025-12-22T12:18:13.269957"
+      },
+      "manazer_petr": {
+        "id": "manazer_petr",
+        "popis": "Muž v obleku, profesionálně vyhlížející",
+        "jmeno": "Petr",
+        "dojem": "Přátelský a zdvořilý kolega nebo nadřízený",
+        "temata": [
+          "reflexe",
+          "moře",
+          "odpočinek"
+        ],
+        "fakta": [
+          "Pracuje v nějaké firemní roli",
+          "Respektuje přirodu a její uklidňující účinky"
+        ],
+        "sila": 0.575,
+        "pocet_setkani": 1,
+        "posledni_setkani": "2025-12-22T12:24:05.768208",
+        "prvni_setkani": "2025-12-22T12:24:05.768208"
+      },
+      "babicka_vlasta": {
+        "id": "babicka_vlasta",
+        "popis": "Starší paní v šátku",
+        "jmeno": "Babička Vlasta",
+        "dojem": "Milovní dobrodružství moře a vzpomínek.",
+        "temata": [
+          "Mořský pohled",
+          "barvy",
+          "paměť",
+          "moře",
+          "Návštěvy",
+          "Vzpomínky"
+        ],
+        "fakta": [
+          "Babička Vlasta miluje moře.",
+          "Mluvila o mladistvých letech",
+          "Zajímala se o přírodní barvy",
+          "Doufají se znovu setkat u moře."
+        ],
+        "sila": 1.0,
+        "pocet_setkani": 2,
+        "posledni_setkani": "2025-12-22T13:37:20.146283",
+        "prvni_setkani": "2025-12-22T13:33:19.404113"
+      }
+    }
+  },
+  "manazer_petr": {
+    "lide": {
+      "babicka_vlasta": {
+        "id": "babicka_vlasta",
+        "popis": "Starší paní v šátku",
+        "jmeno": "Vlasta",
+        "dojem": "Přátelská a filozofická povaha",
+        "temata": [
+          "Realita",
+          "Stress",
+          "Moře"
+        ],
+        "fakta": [
+          "Má sílu nás odvést do jiné reality",
+          "Zmenšuje pocit stresu a zmatek"
+        ],
+        "sila": 0.575,
+        "pocet_setkani": 1,
+        "posledni_setkani": "2025-12-22T12:19:28.473763",
+        "prvni_setkani": "2025-12-22T12:19:28.473763"
+      },
+      "bezdomovec_lojza": {
+        "id": "bezdomovec_lojza",
+        "popis": "Starší muž s plnovousem",
+        "jmeno": "Bezdomovec Lojza",
+        "dojem": "Přátelský a vděčný za setkání.",
+        "temata": [
+          "strášení dne",
+          "pohovor"
+        ],
+        "fakta": [
+          "Vděk za příležitost mluvit.",
+          "Mluvil o hezkém dni u moře."
+        ],
+        "sila": 0.575,
+        "pocet_setkani": 1,
+        "posledni_setkani": "2025-12-22T12:20:30.543325",
+        "prvni_setkani": "2025-12-22T12:20:30.543325"
+      }
+    }
+  },
+  "delnik_franta": {
+    "lide": {
+      "rebelka_adela": {
+        "id": "rebelka_adela",
+        "popis": "Mladá holka s barevnými vlasy",
+        "jmeno": null,
+        "dojem": "Přívětivá a otevřená k rozhovoru",
+        "temata": [
+          "paměť",
+          "dětství",
+          "pláž"
+        ],
+        "fakta": [
+          "Miluje mírný větřík na pláži.",
+          "Pamatuje si radostné okamžiky s kamarády."
+        ],
+        "sila": 0.575,
+        "pocet_setkani": 1,
+        "posledni_setkani": "2025-12-22T12:12:33.138450",
+        "prvni_setkani": "2025-12-22T12:12:33.138450"
+      },
+      "bezdomovec_lojza": {
+        "id": "bezdomovec_lojza",
+        "popis": "Starší muž s plnovousem",
+        "jmeno": "Lojza",
+        "dojem": "Přátelský a otevřený člověk.",
+        "temata": [
+          "smích dětí",
+          "počasí",
+          "Následné setkání",
+          "pohovor",
+          "slunečné odpoledne",
+          "Rozhovor"
+        ],
+        "fakta": [
+          "Mluvil o teplejší vodě a pobřeží.",
+          "Doufal v hezké počasí zítřka.",
+          "Doufal v hezké počasí zítřek.",
+          "Zdůraznil magii smíchu dětí.",
+          "Nemluvil o sobě.",
+          "Bezdomovec Lojza se těší na další setkání."
+        ],
+        "sila": 1.0,
+        "pocet_setkani": 3,
+        "posledni_setkani": "2025-12-22T13:39:36.970720",
+        "prvni_setkani": "2025-12-22T12:14:50.711839"
+      },
+      "babicka_vlasta": {
+        "id": "babicka_vlasta",
+        "popis": "Starší paní v šátku",
+        "jmeno": "Babička Vlasta",
+        "dojem": "Něžná a nostalgická osobnost.",
+        "temata": [
+          "pohled",
+          "Pohoda",
+          "vzpomínky",
+          "Mládí s kamarády",
+          "moře",
+          "Vzpomínky"
+        ],
+        "fakta": [
+          "Miluje si užívat sluníčko a moře.",
+          "pouští se do nostalgických myšlenek",
+          "miluje pohled na moře",
+          "Pamatuje se na krásné letní dny."
+        ],
+        "sila": 1.0,
+        "pocet_setkani": 2,
+        "posledni_setkani": "2025-12-22T13:37:40.809053",
+        "prvni_setkani": "2025-12-22T12:37:30.645550"
+      }
+    }
+  },
+  "bezdomovec_lojza": {
+    "lide": {
+      "rebelka_adela": {
+        "id": "rebelka_adela",
+        "popis": "Mladá holka s barevnými vlasy",
+        "jmeno": null,
+        "dojem": "Přátelská a pozitivní nálada, otevřená k rozhovoru.",
+        "temata": [
+          "moře",
+          "slunečné odpoledne",
+          "počasí"
+        ],
+        "fakta": [
+          "Doufá v teplé moře",
+          "Pohovořili o počasí a náladě"
+        ],
+        "sila": 0.575,
+        "pocet_setkani": 1,
+        "posledni_setkani": "2025-12-22T12:17:45.595733",
+        "prvni_setkani": "2025-12-22T12:17:45.595733"
+      },
+      "babicka_vlasta": {
+        "id": "babicka_vlasta",
+        "popis": "Starší paní v šátku",
+        "jmeno": null,
+        "dojem": "Přátelská a pozitivní nálada",
+        "temata": [
+          "pohovor",
+          "moře",
+          "počasí"
+        ],
+        "fakta": [
+          "Paní mluvila o teplem počasí",
+          "Odpovídala na pohovor"
+        ],
+        "sila": 0.575,
+        "pocet_setkani": 1,
+        "posledni_setkani": "2025-12-22T12:18:48.055184",
+        "prvni_setkani": "2025-12-22T12:18:48.055184"
+      },
+      "manazer_petr": {
+        "id": "manazer_petr",
+        "popis": "Muž v obleku, formálně",
+        "jmeno": "Petr",
+        "dojem": "Polovičatý dojem, zdál se zdvořilý ale strohý.",
+        "temata": [
+          "Konverzace",
+          "Rozhovor",
+          "Závěrečné pozdravy"
+        ],
+        "fakta": [
+          "Petr je manažer",
+          "Mluvil s Lojzou formálně a zdvořile"
+        ],
+        "sila": 0.575,
+        "pocet_setkani": 1,
+        "posledni_setkani": "2025-12-22T12:20:02.734142",
+        "prvni_setkani": "2025-12-22T12:20:02.734142"
+      }
+    }
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "babicka_vlasta__rebelka_adela": {
+    "faze": "znami",
+    "tykani": false,
+    "sympatie": 0.7400000000000003,
+    "pocet_setkani": 37,
+    "historie": []
+  },
+  "babicka_vlasta__manazer_petr": {
+    "faze": "cizinci",
+    "tykani": false,
+    "sympatie": 0.21999999999999997,
+    "pocet_setkani": 11,
+    "historie": []
+  },
+  "babicka_vlasta__delnik_franta": {
+    "faze": "znami",
+    "tykani": false,
+    "sympatie": 0.6400000000000002,
+    "pocet_setkani": 32,
+    "historie": []
+  },
+  "delnik_franta__rebelka_adela": {
+    "faze": "cizinci",
+    "tykani": false,
+    "sympatie": 0.02,
+    "pocet_setkani": 1,
+    "historie": []
+  },
+  "bezdomovec_lojza__delnik_franta": {
+    "faze": "tvare",
+    "tykani": false,
+    "sympatie": 0.25999999999999995,
+    "pocet_setkani": 13,
+    "historie": []
+  },
+  "bezdomovec_lojza__rebelka_adela": {
+    "faze": "cizinci",
+    "tykani": false,
+    "sympatie": 0.04,
+    "pocet_setkani": 2,
+    "historie": []
+  },
+  "babicka_vlasta__bezdomovec_lojza": {
+    "faze": "cizinci",
+    "tykani": false,
+    "sympatie": 0.16,
+    "pocet_setkani": 8,
+    "historie": []
+  },
+  "bezdomovec_lojza__manazer_petr": {
+    "faze": "cizinci",
+    "tykani": false,
+    "sympatie": 0.19999999999999998,
+    "pocet_setkani": 10,
+    "historie": []
+  },
+  "manazer_petr__rebelka_adela": {
+    "faze": "cizinci",
+    "tykani": false,
+    "sympatie": 0.02,
+    "pocet_setkani": 1,
+    "historie": []
+  }
+}
