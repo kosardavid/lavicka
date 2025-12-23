@@ -129,9 +129,13 @@ class BehaviorEngine:
         # Lowercase, odstranění přebytečných mezer
         normalized = text.lower().strip()
         normalized = re.sub(r'\s+', ' ', normalized)
-        # Odeber koncovou interpunkci (., !, ?, ..., ", ', atd.)
-        normalized = re.sub(r'[,.;:!?…"\']+$', '', normalized)
-        return normalized
+        # Odeber koncovou interpunkci (., !, ?, ..., ", ', –, —, ), ] atd.)
+        # Opakovaně dokud se mění (pro "text...")
+        prev = None
+        while prev != normalized:
+            prev = normalized
+            normalized = re.sub(r'[,.;:!?…"\'–—\)\]]+$', '', normalized)
+        return normalized.strip()
 
     def _append_to_history(self, npc_id: str, response_type: str, text: str) -> None:
         """Přidá odpověď do historie."""
@@ -284,7 +288,8 @@ class BehaviorEngine:
             was_asked_question = False
 
             # OPRAVA: Používej last_text z historie
-            if last_text and last_speaker != npc_id:
+            # Guard: last_speaker může být None (po NOTHING response)
+            if last_text and last_speaker and last_speaker != npc_id:
                 npc_name = npc_data.get("jmeno", "")
                 npc_titul = npc_data.get("titul", "")
 
