@@ -30,6 +30,8 @@ class SpeakScorer:
         low_energy_penalty: float = 0.2,
         just_acted_penalty: float = 0.25,  # Penalizace za právě provedenou akci
         just_selected_penalty: float = 0.15,  # Penalizace za nedávný výběr (i nothing)
+        engagement_bonus: float = 0.15,  # Bonus za vysoký engagement
+        low_engagement_penalty: float = 0.20,  # Penalizace za nízký engagement
     ):
         self.pressure_bonus = pressure_bonus
         self.stimulus_bonus = stimulus_bonus
@@ -37,6 +39,8 @@ class SpeakScorer:
         self.low_energy_penalty = low_energy_penalty
         self.just_acted_penalty = just_acted_penalty
         self.just_selected_penalty = just_selected_penalty
+        self.engagement_bonus = engagement_bonus
+        self.low_engagement_penalty = low_engagement_penalty
 
     def score_npc(
         self,
@@ -123,8 +127,20 @@ class SpeakScorer:
                 just_selected = -self.just_selected_penalty * 0.5
         breakdown["just_selected"] = just_selected
 
+        # Engagement bonus/penalizace
+        # NPC s nízkým engagement má menší šanci být vybráno
+        # (aby se neplýtvalo AI callem na někoho kdo bude gate-ován)
+        engagement_mod = 0.0
+        if state.engagement_drive >= 0.5:
+            # Vysoký engagement = bonus
+            engagement_mod = self.engagement_bonus * (state.engagement_drive - 0.5) * 2
+        elif state.engagement_drive < 0.25:
+            # Nízký engagement = penalizace
+            engagement_mod = -self.low_engagement_penalty * (0.25 - state.engagement_drive) * 4
+        breakdown["engagement"] = engagement_mod
+
         # Celkové skóre
-        total = max(0.0, base + pressure + stimulus + cooldown + energy_pen + anti_rep + just_acted + just_selected)
+        total = max(0.0, base + pressure + stimulus + cooldown + energy_pen + anti_rep + just_acted + just_selected + engagement_mod)
         breakdown["total"] = total
 
         return NPCScore(

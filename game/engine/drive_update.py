@@ -38,7 +38,8 @@ class DriveUpdater:
         engagement_question_boost: float = 0.25,
         engagement_pressure_boost: float = 0.10,
         engagement_silence_decay: float = 0.05,
-        engagement_unaddressed_decay: float = 0.08,
+        engagement_unaddressed_decay: float = 0.06,  # Sníženo z 0.08 - méně agresivní
+        engagement_max_growth_per_turn: float = 0.45,  # Cap růstu za tah
     ):
         """
         Args:
@@ -68,6 +69,7 @@ class DriveUpdater:
         self.engagement_pressure_boost = engagement_pressure_boost
         self.engagement_silence_decay = engagement_silence_decay
         self.engagement_unaddressed_decay = engagement_unaddressed_decay
+        self.engagement_max_growth_per_turn = engagement_max_growth_per_turn
 
     def update_drives(
         self,
@@ -212,17 +214,20 @@ class DriveUpdater:
         - SILENCE (nikdo nic neřekl)
         - NPC bylo vybráno ale ne osloveno (snaha "zabavit publikum")
         """
-        drive = state.engagement_drive
+        original_drive = state.engagement_drive
+        drive = original_drive
 
         # 1. Přímé oslovení -> velký boost
-        if was_addressed:
-            drive += self.engagement_addressed_boost
-            state.on_addressed(scene_context.turn_number)
-
         # 2. Otázka na NPC -> boost
-        if was_asked_question:
-            drive += self.engagement_question_boost
+        # Použij max místo sčítání, aby se nekumulovalo +0.60
+        address_boost = 0.0
+        if was_addressed:
+            address_boost = self.engagement_addressed_boost
             state.on_addressed(scene_context.turn_number)
+        if was_asked_question:
+            address_boost = max(address_boost, self.engagement_question_boost)
+            state.on_addressed(scene_context.turn_number)
+        drive += address_boost
 
         # 3. PRESSURE na toto NPC -> mírný boost
         if world_event.event_type == WorldEventType.PRESSURE:
@@ -243,6 +248,11 @@ class DriveUpdater:
                 if state.last_addressed_turn < state.last_selected_turn:
                     # Ale nebylo osloveno před výběrem
                     drive -= self.engagement_unaddressed_decay
+
+        # 6. Cap maximální růst za tah (aby +0.60 nebylo běžné)
+        growth = drive - original_drive
+        if growth > self.engagement_max_growth_per_turn:
+            drive = original_drive + self.engagement_max_growth_per_turn
 
         # Clamp na 0-1
         state.engagement_drive = max(0.0, min(1.0, drive))
@@ -360,18 +370,22 @@ def detect_question_to_npc(
     text: str,
     npc_name: str,
     npc_titul: str = "",
+    total_npcs_in_scene: int = 2,
 ) -> bool:
     """
     Detekuje jestli text obsahuje otázku směřovanou na konkrétní NPC.
 
     Podmínky:
     - Text obsahuje "?"
-    - A zároveň obsahuje oslovení NPC (jméno/titul) nebo vy/ty na začátku věty
+    - A zároveň:
+      - Obsahuje oslovení NPC (jméno/titul) nebo vy/ty na začátku věty
+      - NEBO jsou ve scéně jen 2 NPC (pak otázka je automaticky na druhého)
 
     Args:
         text: Text k analýze
         npc_name: Jméno NPC
         npc_titul: Titul NPC
+        total_npcs_in_scene: Počet NPC ve scéně (default 2)
 
     Returns:
         True pokud je otázka směřována na NPC
@@ -379,5 +393,9 @@ def detect_question_to_npc(
     if not text or "?" not in text:
         return False
 
-    # Musí obsahovat otázku A oslovení
+    # Pokud jsou jen 2 NPC, každá otázka je na toho druhého
+    if total_npcs_in_scene == 2:
+        return True
+
+    # Jinak musí obsahovat otázku A oslovení
     return detect_addressing(text, npc_name, npc_titul)

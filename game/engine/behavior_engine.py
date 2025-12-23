@@ -236,6 +236,7 @@ class BehaviorEngine:
                     self._last_response_text,
                     npc_name,
                     npc_titul,
+                    total_npcs_in_scene=len(self._npc_states),
                 )
 
             self.drive_updater.update_drives(
