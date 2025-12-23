@@ -23,7 +23,7 @@ from .types import (
 from .world_event import WorldEventGenerator, detect_question_target
 from .scorer import SpeakScorer, NPCScore
 from .anti_repetition import AntiRepetitionTracker
-from .drive_update import DriveUpdater, detect_addressing
+from .drive_update import DriveUpdater, detect_addressing, detect_question_to_npc
 
 
 # Globální DEV_INTENT_LOG pro debugging
@@ -221,11 +221,21 @@ class BehaviorEngine:
         for npc_id, state in self._npc_states.items():
             npc_data = self._npc_data_map.get(npc_id, {})
             was_addressed = False
+            was_asked_question = False
+
             if self._last_response_text and self._last_speaker_id != npc_id:
+                npc_name = npc_data.get("jmeno", "")
+                npc_titul = npc_data.get("titul", "")
+
                 was_addressed = detect_addressing(
                     self._last_response_text,
-                    npc_data.get("jmeno", ""),
-                    npc_data.get("titul", ""),
+                    npc_name,
+                    npc_titul,
+                )
+                was_asked_question = detect_question_to_npc(
+                    self._last_response_text,
+                    npc_name,
+                    npc_titul,
                 )
 
             self.drive_updater.update_drives(
@@ -235,6 +245,7 @@ class BehaviorEngine:
                 scene_context=self._scene_context,
                 anti_rep_penalty=anti_rep_penalties.get(npc_id, 0.0),
                 was_addressed=was_addressed,
+                was_asked_question=was_asked_question,
             )
 
         # 4. Skóruj NPC a vyber TOP K
@@ -253,6 +264,7 @@ class BehaviorEngine:
             _log("NPC_SCORE", {
                 "npc_id": npc_id,
                 "speak_drive": state.speak_drive,
+                "engagement_drive": state.engagement_drive,
                 "energy": state.energy,
                 "cooldown": state.cooldown_turns,
                 "score": score_obj.score if score_obj else 0,
@@ -285,6 +297,46 @@ class BehaviorEngine:
             if state:
                 state.on_selected(self._scene_context.turn_number)
 
+            # === PERMISSION GATE ===
+            # Pokud NPC nemá "sociální povolení" mluvit, přeskoč AI call
+            permission_denied = False
+            if state:
+                # Nízký engagement + nízký speak_drive = žádné speech bez důvodu
+                if state.engagement_drive < 0.25 and state.speak_drive < 0.65:
+                    permission_denied = True
+
+                    _log("PERMISSION_DENIED", {
+                        "npc_id": npc_id,
+                        "engagement_drive": state.engagement_drive,
+                        "speak_drive": state.speak_drive,
+                    })
+
+                    # Místo AI call vrátíme NOTHING nebo ACTION/THOUGHT
+                    if state.speak_drive > 0.45:
+                        # Má chuť něco udělat, ale nemá "povolení" mluvit
+                        # -> vrať action nebo thought
+                        generic_actions = [
+                            "Pozoruje okolí.",
+                            "Zamyšleně se dívá na moře.",
+                            "Pousměje se.",
+                        ]
+                        response = NPCResponse(
+                            npc_id=npc_id,
+                            response_type=ResponseType.ACTION,
+                            text=random.choice(generic_actions),
+                        )
+                    else:
+                        # Nízký speak_drive = NOTHING
+                        response = NPCResponse(
+                            npc_id=npc_id,
+                            response_type=ResponseType.NOTHING,
+                        )
+
+                    # Zpracuj odpověď
+                    result = self._process_response(response, world_event)
+                    self._scene_context.on_turn_end()
+                    return result
+
             # Extra instrukce
             extra_instruction = ""
             if self._assisted_active:
@@ -299,6 +351,8 @@ class BehaviorEngine:
             _log("AI_CALL", {
                 "npc_id": npc_id,
                 "score": score.score,
+                "engagement_drive": state.engagement_drive if state else 0,
+                "permission_denied": False,
             })
 
             # Volej AI

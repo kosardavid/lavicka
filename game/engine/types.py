@@ -29,6 +29,7 @@ class NPCBehaviorState:
     npc_id: str
     speak_drive: float = 0.3      # Jak moc chce mluvit (0-1)
     stay_drive: float = 0.7       # Jak moc chce zůstat (0-1)
+    engagement_drive: float = 0.3  # "Sociální povolení" mluvit (0-1) - roste při oslovení/otázce
     cooldown_turns: int = 0       # Kolik tahů musí čekat před další replikou
     energy: float = 1.0           # Energie (0-1), klesá po mluvení
 
@@ -37,6 +38,7 @@ class NPCBehaviorState:
     last_spoke_turn: int = -1     # Poslední tah kdy mluvil
     last_acted_turn: int = -1     # Poslední tah kdy udělal COKOLI (speech/action/thought)
     last_selected_turn: int = -1  # Poslední tah kdy byl vybrán pro AI (i když vrátil nothing)
+    last_addressed_turn: int = -1  # Poslední tah kdy byl osloven/dotázán
 
     def can_speak(self) -> bool:
         """Může NPC mluvit?"""
@@ -56,6 +58,10 @@ class NPCBehaviorState:
     def on_selected(self, current_turn: int) -> None:
         """Zavoláno když byl NPC vybrán pro AI volání (i když vrátí nothing)."""
         self.last_selected_turn = current_turn
+
+    def on_addressed(self, current_turn: int) -> None:
+        """Zavoláno když byl NPC osloven nebo mu byla položena otázka."""
+        self.last_addressed_turn = current_turn
 
     def on_turn_start(self, energy_regen: float = 0.05) -> None:
         """Zavoláno na začátku každého tahu."""

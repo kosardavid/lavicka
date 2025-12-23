@@ -1,5 +1,5 @@
 """
-drive_update.py - Dynamická aktualizace speak_drive a stay_drive.
+drive_update.py - Dynamická aktualizace speak_drive, stay_drive a engagement_drive.
 
 Toto je klíčový modul pro přirozené chování NPC.
 speak_drive a stay_drive se mění podle:
@@ -8,6 +8,12 @@ speak_drive a stay_drive se mění podle:
 - Anti-repetition penalty (opakování = klesá chuť mluvit)
 - Energie NPC (nízká = klesá speak_drive)
 - Cooldown (po mluvení krátký drop)
+
+engagement_drive ("sociální povolení") se mění podle:
+- Přímé oslovení jménem/titulem -> velký boost
+- Otázka směřovaná na NPC -> boost
+- PRESSURE event -> mírný boost
+- SILENCE -> decay (pokud NPC nebylo osloveno)
 """
 
 import re
@@ -27,6 +33,12 @@ class DriveUpdater:
         stay_drive_decay_on_dead_scene: float = 0.08,
         stay_drive_decay_on_low_energy: float = 0.05,
         stay_drive_boost_on_good_scene: float = 0.02,
+        # Engagement drive parametry
+        engagement_addressed_boost: float = 0.35,
+        engagement_question_boost: float = 0.25,
+        engagement_pressure_boost: float = 0.10,
+        engagement_silence_decay: float = 0.05,
+        engagement_unaddressed_decay: float = 0.08,
     ):
         """
         Args:
@@ -37,6 +49,11 @@ class DriveUpdater:
             stay_drive_decay_on_dead_scene: Pokles stay_drive při mrtvé scéně
             stay_drive_decay_on_low_energy: Pokles stay_drive při nízké energii NPC
             stay_drive_boost_on_good_scene: Boost stay_drive při živé scéně
+            engagement_addressed_boost: Boost engagement při přímém oslovení
+            engagement_question_boost: Boost engagement při otázce na NPC
+            engagement_pressure_boost: Boost engagement při PRESSURE
+            engagement_silence_decay: Decay engagement při SILENCE
+            engagement_unaddressed_decay: Decay když NPC bylo vybráno ale ne osloveno
         """
         self.pressure_boost = pressure_boost
         self.silence_growth_rate = silence_growth_rate
@@ -45,6 +62,12 @@ class DriveUpdater:
         self.stay_drive_decay_on_dead_scene = stay_drive_decay_on_dead_scene
         self.stay_drive_decay_on_low_energy = stay_drive_decay_on_low_energy
         self.stay_drive_boost_on_good_scene = stay_drive_boost_on_good_scene
+        # Engagement
+        self.engagement_addressed_boost = engagement_addressed_boost
+        self.engagement_question_boost = engagement_question_boost
+        self.engagement_pressure_boost = engagement_pressure_boost
+        self.engagement_silence_decay = engagement_silence_decay
+        self.engagement_unaddressed_decay = engagement_unaddressed_decay
 
     def update_drives(
         self,
@@ -54,9 +77,10 @@ class DriveUpdater:
         scene_context: SceneContext,
         anti_rep_penalty: float = 0.0,
         was_addressed: bool = False,
+        was_asked_question: bool = False,
     ) -> None:
         """
-        Aktualizuje speak_drive a stay_drive NPC.
+        Aktualizuje speak_drive, stay_drive a engagement_drive NPC.
 
         Args:
             state: Stav NPC k aktualizaci (mutuje se)
@@ -65,6 +89,7 @@ class DriveUpdater:
             scene_context: Kontext scény
             anti_rep_penalty: Penalizace za opakování (0-1)
             was_addressed: Bylo NPC přímo osloveno?
+            was_asked_question: Byla NPC položena otázka?
         """
         povaha = npc_data.get("povaha", {})
         mluvnost = povaha.get("mluvnost", 0.5)
@@ -77,6 +102,11 @@ class DriveUpdater:
         # === STAY DRIVE ===
         self._update_stay_drive(
             state, scene_context, anti_rep_penalty
+        )
+
+        # === ENGAGEMENT DRIVE ===
+        self._update_engagement_drive(
+            state, world_event, scene_context, was_addressed, was_asked_question
         )
 
     def _update_speak_drive(
@@ -161,6 +191,61 @@ class DriveUpdater:
 
         # Clamp na 0-1
         state.stay_drive = max(0.0, min(1.0, drive))
+
+    def _update_engagement_drive(
+        self,
+        state: NPCBehaviorState,
+        world_event: WorldEvent,
+        scene_context: SceneContext,
+        was_addressed: bool,
+        was_asked_question: bool,
+    ) -> None:
+        """
+        Aktualizuje engagement_drive (sociální povolení mluvit).
+
+        Engagement roste když:
+        - NPC bylo přímo osloveno jménem/titulem
+        - NPC byla položena otázka
+        - PRESSURE event cílí na NPC
+
+        Engagement klesá když:
+        - SILENCE (nikdo nic neřekl)
+        - NPC bylo vybráno ale ne osloveno (snaha "zabavit publikum")
+        """
+        drive = state.engagement_drive
+
+        # 1. Přímé oslovení -> velký boost
+        if was_addressed:
+            drive += self.engagement_addressed_boost
+            state.on_addressed(scene_context.turn_number)
+
+        # 2. Otázka na NPC -> boost
+        if was_asked_question:
+            drive += self.engagement_question_boost
+            state.on_addressed(scene_context.turn_number)
+
+        # 3. PRESSURE na toto NPC -> mírný boost
+        if world_event.event_type == WorldEventType.PRESSURE:
+            if world_event.pressure_target == state.npc_id:
+                drive += self.engagement_pressure_boost * world_event.intensity
+
+        # 4. SILENCE -> decay (pokud NPC nebylo osloveno)
+        if world_event.event_type == WorldEventType.SILENCE:
+            if not was_addressed and not was_asked_question:
+                drive -= self.engagement_silence_decay
+
+        # 5. NPC bylo vybráno minulý tah ale nebylo osloveno -> decay
+        # (aby se nesnažilo "zabavit publikum" bez důvodu)
+        if state.last_selected_turn >= 0:
+            turns_since_selected = scene_context.turn_number - state.last_selected_turn
+            if turns_since_selected == 1:
+                # Bylo vybráno minulý tah
+                if state.last_addressed_turn < state.last_selected_turn:
+                    # Ale nebylo osloveno před výběrem
+                    drive -= self.engagement_unaddressed_decay
+
+        # Clamp na 0-1
+        state.engagement_drive = max(0.0, min(1.0, drive))
 
     def on_after_speech(
         self,
@@ -269,3 +354,30 @@ def detect_addressing(
         return True
 
     return False
+
+
+def detect_question_to_npc(
+    text: str,
+    npc_name: str,
+    npc_titul: str = "",
+) -> bool:
+    """
+    Detekuje jestli text obsahuje otázku směřovanou na konkrétní NPC.
+
+    Podmínky:
+    - Text obsahuje "?"
+    - A zároveň obsahuje oslovení NPC (jméno/titul) nebo vy/ty na začátku věty
+
+    Args:
+        text: Text k analýze
+        npc_name: Jméno NPC
+        npc_titul: Titul NPC
+
+    Returns:
+        True pokud je otázka směřována na NPC
+    """
+    if not text or "?" not in text:
+        return False
+
+    # Musí obsahovat otázku A oslovení
+    return detect_addressing(text, npc_name, npc_titul)
