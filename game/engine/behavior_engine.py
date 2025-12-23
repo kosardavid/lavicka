@@ -470,6 +470,8 @@ class BehaviorEngine:
                     _log("HARD_DUPLICATE_REJECT", {
                         "npc_id": npc_id,
                         "text_preview": response.text[:50] if response.text else "",
+                        "normalized": normalized_new[:50] if normalized_new else "",
+                        "action": "downgrade_to_action",
                     })
                     # Reject -> vrať ACTION místo NOTHING (aby něco dělal)
                     generic_actions = [
