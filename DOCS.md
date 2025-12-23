@@ -326,10 +326,11 @@ Dynamická aktualizace speak_drive, stay_drive a engagement_drive každý tah:
 
 **engagement_drive ("sociální povolení") se mění podle:**
 - Přímé oslovení jménem/titulem → +0.35 boost
-- Otázka směřovaná na NPC → +0.25 boost
+- Otázka směřovaná na NPC → +0.25 boost (použije se max, ne součet!)
 - PRESSURE event na NPC → +0.10 * intensity
 - SILENCE (bez oslovení) → -0.05 decay
-- NPC vybráno ale ne osloveno → -0.08 decay
+- NPC vybráno ale ne osloveno → -0.06 decay
+- **Cap růstu za tah:** max +0.45 (aby +0.60 nebylo běžné)
 
 **Permission Gate (před AI voláním):**
 ```python
@@ -358,10 +359,13 @@ detect_addressing("Ten Karel je hodný.", "Karel", "") -> False  # uprostřed v�
 
 **Detekce otázky na NPC (detect_question_to_npc):**
 ```python
-# Otázka = text obsahuje "?" + oslovení
-detect_question_to_npc("Babičko, jak se máte?", "Jana", "Babička") -> True
-detect_question_to_npc("Jak se máte?", "Jana", "Babička") -> False  # žádné oslovení
-detect_question_to_npc("Vy jste z Prahy?", "Karel", "") -> True
+# Otázka = text obsahuje "?"
+# Pro 2 NPC: každá otázka je automaticky na toho druhého
+# Pro 3+ NPC: vyžaduje oslovení
+
+detect_question_to_npc("Jak se máte?", "Jana", "Babička", total_npcs=2) -> True   # 2 NPC
+detect_question_to_npc("Jak se máte?", "Jana", "Babička", total_npcs=3) -> False  # 3 NPC, žádné oslovení
+detect_question_to_npc("Babičko, jak se máte?", "Jana", "Babička", total_npcs=3) -> True
 ```
 
 ```python
@@ -404,7 +408,21 @@ score = speak_drive * energy
       - penalizace za cooldown (0.3 * cooldown_turns)
       - penalizace za nízkou energii
       - penalizace za opakování (0.3 * anti_rep)
-      - penalizace za právě provedenou akci (just_acted)
+      - penalizace za právě provedenou akci (just_acted: -0.25/-0.125)
+      - penalizace za nedávný výběr (just_selected: -0.15/-0.075)
+      + engagement bonus/penalizace (viz níže)
+```
+
+**Engagement v scoringu (v3.5):**
+```python
+# Vysoký engagement (≥ 0.5) = bonus
+engagement_mod = +0.15 * (engagement - 0.5) * 2
+
+# Nízký engagement (< 0.25) = penalizace
+engagement_mod = -0.20 * (0.25 - engagement) * 4
+
+# Tím se TOP_K častěji vybírá ten, kdo má právo mluvit
+# a neplýtvá se AI callem na někoho kdo bude gate-ován
 ```
 
 **Penalizace za právě provedenou akci:**

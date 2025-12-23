@@ -1,240 +1,31 @@
 ===========================================
-BEHAVIOR ENGINE v3.4 - REVIEW PRO CHATGPT
+BEHAVIOR ENGINE v3.5 - REVIEW PRO CHATGPT
 ===========================================
 Datum: 2025-12-23
-Verze: v3.4 (Social Permission mechanismus)
+Verze: v3.5 (opravy z ChatGPT review v3.4)
 
-ZMĚNY OD v3.3:
+ZMĚNY OD v3.4:
 
-1. NOVÉ: engagement_drive ("sociální povolení")
-   - Nový drive v NPCBehaviorState: engagement_drive: float = 0.3
-   - Reprezentuje "sociální povolení" mluvit - roste při oslovení/otázce
-   - Brání NPC mluvit bez důvodu (nebylo osloveno, nebyla otázka)
+1. NOVÉ: Engagement v scoringu
+   - Vysoký engagement (≥ 0.5) = bonus: +0.15 * (eng - 0.5) * 2
+   - Nízký engagement (< 0.25) = penalizace: -0.20 * (0.25 - eng) * 4
+   - Tím se TOP_K častěji vybírá ten, kdo má právo mluvit
 
-2. NOVÉ: Permission Gate před AI voláním
-   - Pokud engagement_drive < 0.25 AND speak_drive < 0.65:
-     - Přeskoč AI volání (šetří API calls)
-     - Vrať ACTION (pokud speak_drive > 0.45) nebo NOTHING
-   - Loguje PERMISSION_DENIED do DEV_INTENT_LOG
+2. ZMĚNA: Cap engagement growth per turn
+   - Max růst za tah: +0.45
+   - Addressed + question používá max() místo sčítání
+   - Zabraňuje +0.60 skokům
 
-3. NOVÉ: detect_question_to_npc()
-   - Detekuje otázku směřovanou na konkrétní NPC
-   - Podmínka: text obsahuje "?" + oslovení (jméno/titul/vy/ty)
-   - Příklad: "Babičko, jak se máte?" -> True
-   - Příklad: "Jak se máte?" -> False (žádné oslovení)
+3. ZMĚNA: unaddressed_decay snížen
+   - Původně: 0.08
+   - Teď: 0.06 (méně agresivní)
 
-4. NOVÉ: last_addressed_turn v NPCBehaviorState
-   - Sleduje kdy bylo NPC naposledy osloveno/dotázáno
-   - Používá se pro decay engagement při neoslovení
+4. ZMĚNA: detect_question_to_npc pro 2 NPC
+   - Pro 2 NPC: každá otázka "?" je automaticky na druhého
+   - Pro 3+ NPC: vyžaduje oslovení (jako dřív)
 
 ===========================================
-ENGAGEMENT DRIVE - PRAVIDLA AKTUALIZACE
-===========================================
-
-engagement_drive ROSTE při:
-- Přímé oslovení jménem/titulem: +0.35
-- Otázka směřovaná na NPC: +0.25
-- PRESSURE event cílící na NPC: +0.10 * intensity
-
-engagement_drive KLESÁ při:
-- SILENCE (bez oslovení): -0.05
-- NPC bylo vybráno ale ne osloveno (minulý tah): -0.08
-
-```python
-def _update_engagement_drive(
-    state, world_event, scene_context, was_addressed, was_asked_question
-):
-    drive = state.engagement_drive
-
-    # 1. Přímé oslovení -> velký boost
-    if was_addressed:
-        drive += 0.35
-        state.on_addressed(scene_context.turn_number)
-
-    # 2. Otázka na NPC -> boost
-    if was_asked_question:
-        drive += 0.25
-        state.on_addressed(scene_context.turn_number)
-
-    # 3. PRESSURE na toto NPC -> mírný boost
-    if world_event.event_type == WorldEventType.PRESSURE:
-        if world_event.pressure_target == state.npc_id:
-            drive += 0.10 * world_event.intensity
-
-    # 4. SILENCE -> decay (pokud NPC nebylo osloveno)
-    if world_event.event_type == WorldEventType.SILENCE:
-        if not was_addressed and not was_asked_question:
-            drive -= 0.05
-
-    # 5. NPC vybráno ale ne osloveno -> decay
-    if state.last_selected_turn >= 0:
-        turns_since_selected = scene_context.turn_number - state.last_selected_turn
-        if turns_since_selected == 1:
-            if state.last_addressed_turn < state.last_selected_turn:
-                drive -= 0.08
-
-    state.engagement_drive = max(0.0, min(1.0, drive))
-```
-
-===========================================
-PERMISSION GATE - IMPLEMENTACE
-===========================================
-
-Před AI voláním v process_turn():
-
-```python
-# === PERMISSION GATE ===
-if state:
-    if state.engagement_drive < 0.25 and state.speak_drive < 0.65:
-        permission_denied = True
-        _log("PERMISSION_DENIED", {
-            "npc_id": npc_id,
-            "engagement_drive": state.engagement_drive,
-            "speak_drive": state.speak_drive,
-        })
-
-        # Generická akce nebo nothing
-        if state.speak_drive > 0.45:
-            response = NPCResponse(
-                npc_id=npc_id,
-                response_type=ResponseType.ACTION,
-                text=random.choice(generic_actions),
-            )
-        else:
-            response = NPCResponse(
-                npc_id=npc_id,
-                response_type=ResponseType.NOTHING,
-            )
-        result = self._process_response(response, world_event)
-        self._scene_context.on_turn_end()
-        return result
-```
-
-Generic actions pro Permission Gate:
-- "Pozoruje okolí."
-- "Zamyšleně přikývne."
-- "Podívá se na moře."
-- "Pousměje se."
-
-===========================================
-SOUBOR: game/engine/types.py (změny)
-===========================================
-
-```python
-@dataclass
-class NPCBehaviorState:
-    npc_id: str
-    speak_drive: float = 0.3
-    stay_drive: float = 0.7
-    engagement_drive: float = 0.3  # NOVÉ: "sociální povolení" mluvit
-    cooldown_turns: int = 0
-    energy: float = 1.0
-    speeches_count: int = 0
-    last_spoke_turn: int = -1
-    last_acted_turn: int = -1
-    last_selected_turn: int = -1
-    last_addressed_turn: int = -1  # NOVÉ: kdy byl osloven/dotázán
-
-    def on_addressed(self, current_turn: int) -> None:
-        """Zavoláno když byl NPC osloven nebo mu byla položena otázka."""
-        self.last_addressed_turn = current_turn
-```
-
-===========================================
-SOUBOR: game/engine/drive_update.py (změny)
-===========================================
-
-Nové parametry v DriveUpdater.__init__():
-```python
-# Engagement drive parametry
-engagement_addressed_boost: float = 0.35,
-engagement_question_boost: float = 0.25,
-engagement_pressure_boost: float = 0.10,
-engagement_silence_decay: float = 0.05,
-engagement_unaddressed_decay: float = 0.08,
-```
-
-Nová metoda _update_engagement_drive() - viz výše.
-
-Nová funkce:
-```python
-def detect_question_to_npc(
-    text: str,
-    npc_name: str,
-    npc_titul: str = "",
-) -> bool:
-    """
-    Detekuje jestli text obsahuje otázku směřovanou na konkrétní NPC.
-    Podmínky: text obsahuje "?" + oslovení NPC
-    """
-    if not text or "?" not in text:
-        return False
-    return detect_addressing(text, npc_name, npc_titul)
-```
-
-===========================================
-SOUBOR: game/engine/behavior_engine.py (změny)
-===========================================
-
-Nové importy:
-```python
-from .drive_update import DriveUpdater, detect_addressing, detect_question_to_npc
-```
-
-V process_turn() - detekce oslovení a otázky:
-```python
-# Detekce oslovení a otázky pro engagement_drive
-last_text = ""
-if self._history:
-    last_text = self._history[-1].get("text", "")
-
-for npc_id in top_k:
-    npc_data = self._get_npc_data(npc_id)
-    npc_name = npc_data.get("jmeno", "")
-    npc_titul = npc_data.get("titul", "")
-
-    was_addressed = detect_addressing(last_text, npc_name, npc_titul)
-    was_asked_question = detect_question_to_npc(last_text, npc_name, npc_titul)
-
-    # Update drives s engagement
-    self._drive_updater.update_drives(
-        state=state,
-        npc_data=npc_data,
-        world_event=world_event,
-        scene_context=self._scene_context,
-        anti_rep_penalty=anti_penalties.get(npc_id, 0.0),
-        was_addressed=was_addressed,
-        was_asked_question=was_asked_question,
-    )
-```
-
-===========================================
-TEST VÝSLEDKY
-===========================================
-
-Test detect_question_to_npc():
-
-1. "Babičko, jak se máte?" + jmeno="Vlasta", titul="Babička"
-   -> True (otázka + oslovení titulem)
-
-2. "Jak se máte?" + jmeno="Vlasta", titul="Babička"
-   -> False (otázka bez oslovení)
-
-3. "Krásné počasí, Vlastičko." + jmeno="Vlastička"
-   -> False (není otázka)
-
-4. "Vy jste z Prahy?" + jmeno="Karel"
-   -> True (otázka + Vy na začátku)
-
-5. "A ty, Karle?" + jmeno="Karel"
-   -> True (otázka + jméno)
-
-=== Všechny testy prošly! ===
-
-Spuštění hry: OK, žádné chyby.
-
-===========================================
-ARCHITEKTURA - SOUHRN
+AKTUÁLNÍ ARCHITEKTURA
 ===========================================
 
 ```
@@ -243,50 +34,192 @@ process_turn():
     2. Generuj WorldEvent
     3. Pro každé NPC:
        a. Detekuj oslovení/otázku
-       b. Update drives (speak, stay, engagement)  <- NOVÉ engagement
-    4. Skóruj NPC a vyber TOP K
+       b. Update drives (speak, stay, engagement)
+    4. Skóruj NPC a vyber TOP K (včetně engagement bonus/penalty)
     5. Pro každé NPC v TOP K:
        a. state.on_selected(turn)
-       b. === PERMISSION GATE ===              <- NOVÉ
+       b. === PERMISSION GATE ===
           - Pokud engagement < 0.25 AND speak < 0.65:
             - Vrať ACTION nebo NOTHING bez AI volání
        c. Zavolej AI
        d. Pokud response:
           - result = _process_response(response, event)
-          - scene_context.on_turn_end()
+          - scene_context.on_turn_end()  ← JEDNOU tady
           - return result
     6. Žádná odpověď:
        - scene_context.on_silence()
-       - scene_context.on_turn_end()
+       - scene_context.on_turn_end()  ← JEDNOU tady
        - return None
 ```
 
 ===========================================
-OTÁZKY PRO REVIEW
+ENGAGEMENT DRIVE - AKTUÁLNÍ PRAVIDLA
 ===========================================
 
-1. Jsou hodnoty engagement boostů správné?
-   - addressed_boost = 0.35
-   - question_boost = 0.25
-   - pressure_boost = 0.10
+engagement_drive ROSTE při:
+- Přímé oslovení jménem/titulem: +0.35
+- Otázka směřovaná na NPC: +0.25 (použije se max, ne součet!)
+- PRESSURE event cílící na NPC: +0.10 * intensity
+- **Cap:** max +0.45 růst za tah
 
-2. Je Permission Gate prahová hodnota správná?
-   - engagement < 0.25 AND speak < 0.65
-   - Měly by být jiné prahy?
+engagement_drive KLESÁ při:
+- SILENCE (bez oslovení): -0.05
+- NPC bylo vybráno ale ne osloveno (minulý tah): -0.06
 
-3. Měl by engagement_drive ovlivňovat i scoring?
-   - Aktuálně: engagement jen v Permission Gate
-   - Alternativa: přidat engagement do score výpočtu?
+```python
+def _update_engagement_drive(...):
+    original_drive = state.engagement_drive
+    drive = original_drive
 
-4. Je decay při neoslovení správný?
-   - silence_decay = 0.05
-   - unaddressed_decay = 0.08
+    # 1+2. Přímé oslovení + Otázka -> použij MAX (ne součet!)
+    address_boost = 0.0
+    if was_addressed:
+        address_boost = 0.35
+        state.on_addressed(turn)
+    if was_asked_question:
+        address_boost = max(address_boost, 0.25)  # MAX!
+        state.on_addressed(turn)
+    drive += address_boost
 
-5. Další návrhy na zlepšení?
+    # 3. PRESSURE -> mírný boost
+    if PRESSURE and target == npc_id:
+        drive += 0.10 * intensity
+
+    # 4. SILENCE -> decay
+    if SILENCE and not addressed:
+        drive -= 0.05
+
+    # 5. Vybráno ale ne osloveno -> decay
+    if last_selected == turn - 1 and last_addressed < last_selected:
+        drive -= 0.06
+
+    # 6. CAP růstu za tah
+    growth = drive - original_drive
+    if growth > 0.45:
+        drive = original_drive + 0.45
+
+    state.engagement_drive = clamp(drive, 0, 1)
+```
+
+===========================================
+SCORER - AKTUÁLNÍ VÝPOČET
+===========================================
+
+```python
+score = speak_drive * energy           # Základ
+      + 0.4 * intensity                # PRESSURE bonus
+      + 0.2 * intensity * mluvnost     # STIMULUS bonus
+      - 0.3 * cooldown_turns           # Cooldown penalty
+      - 0.2 * (0.3 - energy)           # Low energy penalty
+      - 0.3 * anti_rep_penalty         # Repetition penalty
+      - just_acted_penalty             # -0.25 / -0.125
+      - just_selected_penalty          # -0.15 / -0.075
+      + engagement_mod                 # NOVÉ v3.5
+
+# Engagement modifikátor:
+if engagement >= 0.5:
+    engagement_mod = +0.15 * (engagement - 0.5) * 2  # max +0.15
+elif engagement < 0.25:
+    engagement_mod = -0.20 * (0.25 - engagement) * 4  # max -0.20
+else:
+    engagement_mod = 0
+```
+
+===========================================
+DETECT_QUESTION_TO_NPC - AKTUÁLNÍ LOGIKA
+===========================================
+
+```python
+def detect_question_to_npc(text, npc_name, npc_titul, total_npcs_in_scene=2):
+    if "?" not in text:
+        return False
+
+    # Pro 2 NPC: každá otázka je automaticky na druhého
+    if total_npcs_in_scene == 2:
+        return True
+
+    # Pro 3+ NPC: vyžaduje oslovení
+    return detect_addressing(text, npc_name, npc_titul)
+```
+
+Test výsledky:
+- "Jak se máte?" (2 NPC) -> True
+- "Jak se máte?" (3 NPC) -> False
+- "Babičko, jak se máte?" (3 NPC) -> True
+
+===========================================
+PERMISSION GATE - AKTUÁLNÍ LOGIKA
+===========================================
+
+```python
+if state.engagement_drive < 0.25 and state.speak_drive < 0.65:
+    # Přeskoč AI volání
+    if state.speak_drive > 0.45:
+        return ACTION(random.choice(generic_actions))
+    else:
+        return NOTHING
+```
+
+Generic actions:
+- "Pozoruje okolí."
+- "Zamyšleně se dívá na moře."
+- "Pousměje se."
+
+===========================================
+on_turn_end() - POTVRZENO SPRÁVNÉ
+===========================================
+
+on_turn_end() se volá JEDNOU za tah v process_turn():
+- Po Permission Gate větvi (řádek 337)
+- Po AI odpovědi (řádek 370)
+- Po žádné odpovědi (řádek 375)
+
+_process_response() NEVOLÁ on_turn_end() - to je správně.
+
+===========================================
+SOUBORY ZMĚNĚNÉ V v3.5
+===========================================
+
+1. game/engine/scorer.py
+   - Přidány engagement_bonus a low_engagement_penalty parametry
+   - Přidán engagement_mod do výpočtu skóre
+
+2. game/engine/drive_update.py
+   - engagement_unaddressed_decay: 0.08 -> 0.06
+   - engagement_max_growth_per_turn: 0.45 (nový parametr)
+   - addressed + question používá max() místo sčítání
+   - Cap na růst za tah
+
+3. game/engine/behavior_engine.py
+   - detect_question_to_npc předává total_npcs_in_scene
+
+===========================================
+TESTY - VŠECHNY PROŠLY
+===========================================
+
+Test 1: Engagement v scoreru
+- High engagement (0.7): engagement_mod = +0.060
+- Low engagement (0.15): engagement_mod = -0.080
+
+Test 2: Cap na engagement growth
+- Po addressed+question+pressure: 0.75 (capped)
+- Po addressed only: 0.65
+
+Test 3: detect_question pro 2 NPC
+- "Jak se máte?" (2 NPC): True
+- "Jak se máte?" (3 NPC): False
+- "Karle, jak se máte?" (3 NPC): True
 
 ===========================================
 ZMĚNY OD PŘEDCHOZÍCH VERZÍ (souhrn)
 ===========================================
+
+v3.5:
+- Engagement v scoringu (bonus/penalizace)
+- Cap engagement growth per turn na +0.45
+- unaddressed_decay snížen na 0.06
+- detect_question: pro 2 NPC stačí "?"
+- max() místo sčítání pro addressed+question
 
 v3.4:
 - engagement_drive ("sociální povolení")
@@ -310,4 +243,19 @@ v3.1:
 v3.0:
 - Anti-repetition sleduje začátky replik
 - Detekce vokativů pro češtinu
-- Odstranění filtru délky slov
+
+===========================================
+OTÁZKY PRO REVIEW
+===========================================
+
+1. Je engagement v scoringu správně nastavený?
+   - bonus: +0.15 při eng ≥ 0.5
+   - penalizace: -0.20 při eng < 0.25
+
+2. Je cap +0.45 na růst engagement vhodný?
+   - Nebo by měl být nižší (třeba +0.40)?
+
+3. Je logika max(addressed, question) správná?
+   - Alternativa: addressed se sčítá, ale question ne?
+
+4. Další návrhy na zlepšení?
