@@ -499,7 +499,8 @@ class BehaviorEngine:
                 # Úplné odmítnutí - změň na nothing
                 _log("ANTI_REP_REJECT", {"npc_id": npc_id, "action": "reject"})
                 response = NPCResponse(npc_id=npc_id, response_type=ResponseType.NOTHING)
-                self._append_to_history(npc_id, "nothing", "")
+                # npc_id=None aby last_speaker nebyl mlčící NPC
+                self._append_to_history(None, "nothing", "")
                 self._scene_context.on_nothing()
                 # on_turn_end() se volá v process_turn(), ne tady
                 if state:
@@ -585,8 +586,10 @@ class BehaviorEngine:
 
         elif response.response_type == ResponseType.NOTHING:
             # Úplná nečinnost - NPC nic nedělá, NENÍ to akce
-            self._append_to_history(npc_id, "nothing", "")
+            # DŮLEŽITÉ: npc_id=None aby last_speaker nebyl mlčící NPC
+            self._append_to_history(None, "nothing", "")
             self._scene_context.on_nothing()
+            _log("NOTHING_RESPONSE", {"original_npc_id": npc_id})
             # OPRAVA: NOTHING není speech -> resetuj consecutive counter
             self._last_speaker_id = None
             self._consecutive_speaker_count = 0
