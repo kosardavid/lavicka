@@ -3,8 +3,11 @@ SpeakScorer - výběr TOP K NPC pro AI volání.
 
 Skóruje NPC podle jejich stavu a světové události,
 vybírá ty s nejvyšším skóre pro AI generování.
+
+Obsahuje anti-starvation mechanismus pro low-engagement NPC.
 """
 
+import random
 from typing import List, Dict, Optional
 from dataclasses import dataclass
 
@@ -32,6 +35,8 @@ class SpeakScorer:
         just_selected_penalty: float = 0.15,  # Penalizace za nedávný výběr (i nothing)
         engagement_bonus: float = 0.15,  # Bonus za vysoký engagement
         low_engagement_penalty: float = 0.20,  # Penalizace za nízký engagement
+        anti_starvation_chance: float = 0.08,  # 8% šance pro low-engagement NPC
+        anti_starvation_threshold: float = 0.25,  # Pod jaký engagement se aktivuje
     ):
         self.pressure_bonus = pressure_bonus
         self.stimulus_bonus = stimulus_bonus
@@ -41,6 +46,8 @@ class SpeakScorer:
         self.just_selected_penalty = just_selected_penalty
         self.engagement_bonus = engagement_bonus
         self.low_engagement_penalty = low_engagement_penalty
+        self.anti_starvation_chance = anti_starvation_chance
+        self.anti_starvation_threshold = anti_starvation_threshold
 
     def score_npc(
         self,
@@ -139,8 +146,18 @@ class SpeakScorer:
             engagement_mod = -self.low_engagement_penalty * (0.25 - state.engagement_drive) * 4
         breakdown["engagement"] = engagement_mod
 
+        # Anti-starvation: low-engagement NPC občas dostane bonus šanci
+        # Aby úplně nezmizelo ze scény
+        anti_starvation = 0.0
+        if state.engagement_drive < self.anti_starvation_threshold:
+            if random.random() < self.anti_starvation_chance:
+                # Vyhrál loterii - dostane bonus který kompenzuje penalizace
+                anti_starvation = 0.35  # Dostatečný na překonání engagement penalty
+                breakdown["anti_starvation_triggered"] = True
+        breakdown["anti_starvation"] = anti_starvation
+
         # Celkové skóre
-        total = max(0.0, base + pressure + stimulus + cooldown + energy_pen + anti_rep + just_acted + just_selected + engagement_mod)
+        total = max(0.0, base + pressure + stimulus + cooldown + energy_pen + anti_rep + just_acted + just_selected + engagement_mod + anti_starvation)
         breakdown["total"] = total
 
         return NPCScore(
