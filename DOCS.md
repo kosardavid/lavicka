@@ -388,7 +388,21 @@ _extract_start("Ano, máte pravdu.") -> "ano"
 
 **Pre-check:** Penalizace ve scoringu podle minulého opakování.
 
-**Post-check:** Po AI odpovědi kontrola a případný downgrade:
+**Post-check:** Po AI odpovědi kontrola a případný downgrade.
+
+**DŮLEŽITÉ - record_speech se volá VŽDY:**
+```python
+# V _process_response:
+if response.is_speech():
+    # 1. Nejdřív zkontroluj penalizaci (proti stávající historii)
+    rejection_action = anti_rep.get_rejection_action(npc_id, text)
+
+    # 2. VŽDY zaznamenej do historie (i při downgrade/reject)
+    anti_rep.record_speech(npc_id, text)
+
+    # 3. Pak proveď akci (accept/downgrade/reject)
+```
+Tím se zajistí, že i downgraded/rejected repliky ovlivňují budoucí penalizace.
 
 ```python
 def get_rejection_action(npc_id, proposed_text) -> str:

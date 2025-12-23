@@ -1,8 +1,13 @@
 ===========================================
-BEHAVIOR ENGINE v3 - REVIEW PRO CHATGPT
+BEHAVIOR ENGINE v3.1 - REVIEW PRO CHATGPT
 ===========================================
 Datum: 2025-12-23
-Verze: v3 (opravy anti-repetition + vokativy)
+Verze: v3.1 (oprava record_speech při downgrade)
+
+ZMĚNY OD v3:
+1. OPRAVA: record_speech se nyní volá VŽDY, i při downgrade/reject
+   - Dříve se downgraded repliky nezaznamenávaly do historie
+   - Teď i downgraded "Ano, ..." zvyšuje penalizaci pro další repliky
 
 ZMĚNY OD v2:
 1. Anti-repetition nyní sleduje začátky replik ("Ano, ...", "No, ...")
@@ -348,6 +353,28 @@ def detect_addressing(last_response_text: str, npc_name: str, npc_titul: str = "
             return True
 
     return False
+
+
+===========================================
+KLÍČOVÁ ZMĚNA: behavior_engine.py
+===========================================
+
+V _process_response se nyní record_speech volá VŽDY:
+
+```python
+if response.is_speech():
+    # 1. Post-check anti-repetition (PŘED záznamem)
+    rejection_action = self.anti_rep.get_rejection_action(npc_id, response.text)
+
+    # 2. VŽDY zaznamenej do historie (i při downgrade/reject)
+    self.anti_rep.record_speech(npc_id, response.text)
+
+    # 3. Pak proveď akci podle rejection_action...
+```
+
+Tím se zajistí, že i downgraded/rejected repliky ovlivňují budoucí penalizace.
+Dříve: downgraded "Ano, ..." se nezaznamenalo -> další "Ano, ..." mělo nízkou penalizaci
+Teď: každé "Ano, ..." se zaznamená -> penalizace správně narůstá
 
 
 ===========================================

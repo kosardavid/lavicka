@@ -323,8 +323,12 @@ class BehaviorEngine:
         state = self._npc_states.get(npc_id)
 
         if response.is_speech():
-            # Post-check anti-repetition
+            # Post-check anti-repetition (PŘED záznamem, aby se nepenalizoval sám sebou)
             rejection_action = self.anti_rep.get_rejection_action(npc_id, response.text)
+
+            # DŮLEŽITÉ: Zaznamenej speech VŽDY (i při downgrade)
+            # Tím se penalizuje opakování v dalších replikách
+            self.anti_rep.record_speech(npc_id, response.text)
 
             if rejection_action == "reject":
                 # Úplné odmítnutí - změň na nothing
@@ -377,8 +381,7 @@ class BehaviorEngine:
             self._scene_context.on_speech()
             self._assisted_active = False  # Reset assisted modu
 
-            # Zaznamenej pro anti-repetition
-            self.anti_rep.record_speech(npc_id, response.text)
+            # record_speech už voláno nahoře před post-check
 
             # Ulož pro další tah
             self._last_speaker_id = npc_id
