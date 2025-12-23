@@ -6,6 +6,7 @@ NPC rozhodují sami na základě speak_drive, stay_drive, cooldown, energy.
 TOP K NPC jdou do AI, ostatní čekají nebo dělají scripted akce.
 """
 
+import re
 import time
 import random
 from typing import Optional, List, Dict, Any, Callable
@@ -100,6 +101,57 @@ class BehaviorEngine:
         self._last_response_text: str = ""
         self._assisted_active: bool = False
 
+        # Historie všech odpovědí pro správné trackování
+        self._history: List[Dict[str, Any]] = []
+
+        # Max po sobě jdoucí repliky od stejného NPC
+        self.max_consecutive_speaker = 2
+        self._consecutive_speaker_count = 0
+
+    # === HELPERS ===
+
+    def _get_last_text_from_history(self) -> str:
+        """Vrátí text poslední odpovědi z historie."""
+        if not self._history:
+            return ""
+        return self._history[-1].get("text", "")
+
+    def _get_last_speaker_from_history(self) -> Optional[str]:
+        """Vrátí ID posledního mluvčího z historie."""
+        if not self._history:
+            return None
+        return self._history[-1].get("npc_id")
+
+    def _normalize_text(self, text: str) -> str:
+        """Normalizuje text pro porovnání (lowercase, bez extra mezer, bez koncové interpunkce)."""
+        if not text:
+            return ""
+        # Lowercase, odstranění přebytečných mezer
+        normalized = text.lower().strip()
+        normalized = re.sub(r'\s+', ' ', normalized)
+        # Odeber koncovou interpunkci (., !, ?, ..., ", ', atd.)
+        normalized = re.sub(r'[,.;:!?…"\']+$', '', normalized)
+        return normalized
+
+    def _append_to_history(self, npc_id: str, response_type: str, text: str) -> None:
+        """Přidá odpověď do historie."""
+        self._history.append({
+            "npc_id": npc_id,
+            "type": response_type,
+            "text": text,
+            "turn": self._scene_context.turn_number if self._scene_context else 0,
+        })
+        # Udržuj max 20 položek
+        if len(self._history) > 20:
+            self._history.pop(0)
+
+    def _get_last_speech_by_npc(self, npc_id: str) -> Optional[str]:
+        """Vrátí text poslední SPEECH odpovědi od konkrétního NPC."""
+        for entry in reversed(self._history):
+            if entry.get("npc_id") == npc_id and entry.get("type") == "speech":
+                return entry.get("text", "")
+        return None
+
     # === LIFECYCLE ===
 
     def is_active(self) -> bool:
@@ -145,6 +197,8 @@ class BehaviorEngine:
         self._last_speaker_id = None
         self._last_response_text = ""
         self._assisted_active = False
+        self._history = []
+        self._consecutive_speaker_count = 0
 
         # Vyčisti anti-repetition
         self.anti_rep.clear()
@@ -162,6 +216,8 @@ class BehaviorEngine:
         self._last_speaker_id = None
         self._last_response_text = ""
         self._assisted_active = False
+        self._history = []
+        self._consecutive_speaker_count = 0
 
     # === MAIN PROCESSING ===
 
@@ -189,12 +245,16 @@ class BehaviorEngine:
             state.on_turn_start(self.energy_regen_turn)
 
         # 2. Generuj WorldEvent
-        last_was_question = "?" in self._last_response_text
+        # OPRAVA: Používej text z historie, ne cache
+        last_text = self._get_last_text_from_history()
+        last_speaker = self._get_last_speaker_from_history()
+
+        last_was_question = "?" in last_text
         question_target = None
-        if last_was_question and self._last_speaker_id:
+        if last_was_question and last_speaker:
             question_target = detect_question_target(
-                self._last_response_text,
-                self._last_speaker_id,
+                last_text,
+                last_speaker,
                 list(self._npc_states.keys()),
             )
 
@@ -223,17 +283,18 @@ class BehaviorEngine:
             was_addressed = False
             was_asked_question = False
 
-            if self._last_response_text and self._last_speaker_id != npc_id:
+            # OPRAVA: Používej last_text z historie
+            if last_text and last_speaker != npc_id:
                 npc_name = npc_data.get("jmeno", "")
                 npc_titul = npc_data.get("titul", "")
 
                 was_addressed = detect_addressing(
-                    self._last_response_text,
+                    last_text,
                     npc_name,
                     npc_titul,
                 )
                 was_asked_question = detect_question_to_npc(
-                    self._last_response_text,
+                    last_text,
                     npc_name,
                     npc_titul,
                     total_npcs_in_scene=len(self._npc_states),
@@ -274,10 +335,12 @@ class BehaviorEngine:
             })
 
         # 5. Kontrola jestli má někdo mluvit
+        # OPRAVA: result se nastaví v různých větvích, on_turn_end() se volá JEN JEDNOU na konci
+        result = None
+
         if not self.scorer.should_anyone_speak(top_scores, self.min_score_to_speak):
             # Nikdo nemá dostatečné skóre - ticho
             self._scene_context.on_silence()
-            self._scene_context.on_turn_end()
 
             # Kontrola ASSISTED módu
             if self._scene_context.is_dying():
@@ -286,26 +349,20 @@ class BehaviorEngine:
                     "consecutive_silence": self._scene_context.consecutive_silence,
                     "scene_energy": self._scene_context.scene_energy,
                 })
+            # result zůstává None
+        else:
+            # 6. Volej AI pro TOP K NPC
+            for score in top_scores:
+                npc_id = score.npc_id
+                state = self._npc_states.get(npc_id)
 
-            return None
+                # Zaznamenej výběr (i když vrátí nothing)
+                if state:
+                    state.on_selected(self._scene_context.turn_number)
 
-        # 6. Volej AI pro TOP K NPC
-        for score in top_scores:
-            npc_id = score.npc_id
-            state = self._npc_states.get(npc_id)
-
-            # Zaznamenej výběr (i když vrátí nothing)
-            if state:
-                state.on_selected(self._scene_context.turn_number)
-
-            # === PERMISSION GATE ===
-            # Pokud NPC nemá "sociální povolení" mluvit, přeskoč AI call
-            permission_denied = False
-            if state:
-                # Nízký engagement + nízký speak_drive = žádné speech bez důvodu
-                if state.engagement_drive < 0.25 and state.speak_drive < 0.65:
-                    permission_denied = True
-
+                # === PERMISSION GATE ===
+                # Pokud NPC nemá "sociální povolení" mluvit, přeskoč AI call
+                if state and state.engagement_drive < 0.25 and state.speak_drive < 0.65:
                     _log("PERMISSION_DENIED", {
                         "npc_id": npc_id,
                         "engagement_drive": state.engagement_drive,
@@ -314,8 +371,6 @@ class BehaviorEngine:
 
                     # Místo AI call vrátíme NOTHING nebo ACTION/THOUGHT
                     if state.speak_drive > 0.45:
-                        # Má chuť něco udělat, ale nemá "povolení" mluvit
-                        # -> vrať action nebo thought
                         generic_actions = [
                             "Pozoruje okolí.",
                             "Zamyšleně se dívá na moře.",
@@ -327,54 +382,73 @@ class BehaviorEngine:
                             text=random.choice(generic_actions),
                         )
                     else:
-                        # Nízký speak_drive = NOTHING
                         response = NPCResponse(
                             npc_id=npc_id,
                             response_type=ResponseType.NOTHING,
                         )
 
-                    # Zpracuj odpověď
                     result = self._process_response(response, world_event)
-                    self._scene_context.on_turn_end()
-                    return result
+                    break  # Konec smyčky, jdeme na společný on_turn_end()
 
-            # Extra instrukce
-            extra_instruction = ""
-            if self._assisted_active:
-                # Vyber náhodnou assisted možnost
-                option = random.choice(ASSISTED_OPTIONS)
-                extra_instruction = option.instruction
-                _log("ASSISTED_INSTRUCTION", {
+                # === MAX CONSECUTIVE SPEAKER CHECK ===
+                # Pokud tento NPC už mluvil 2x za sebou, přeskoč na ACTION
+                if self._last_speaker_id == npc_id and self._consecutive_speaker_count >= self.max_consecutive_speaker:
+                    _log("MAX_CONSECUTIVE_SPEAKER", {
+                        "npc_id": npc_id,
+                        "consecutive_count": self._consecutive_speaker_count,
+                        "max_allowed": self.max_consecutive_speaker,
+                    })
+
+                    generic_actions = [
+                        "Chvíli mlčí a pozoruje okolí.",
+                        "Zamyšleně se dívá na moře.",
+                        "Nechává prostor druhému.",
+                    ]
+                    response = NPCResponse(
+                        npc_id=npc_id,
+                        response_type=ResponseType.ACTION,
+                        text=random.choice(generic_actions),
+                    )
+                    result = self._process_response(response, world_event)
+                    break  # Konec smyčky, jdeme na společný on_turn_end()
+
+                # Extra instrukce
+                extra_instruction = ""
+                if self._assisted_active:
+                    option = random.choice(ASSISTED_OPTIONS)
+                    extra_instruction = option.instruction
+                    _log("ASSISTED_INSTRUCTION", {
+                        "npc_id": npc_id,
+                        "instruction": extra_instruction,
+                    })
+
+                _log("AI_CALL", {
                     "npc_id": npc_id,
-                    "instruction": extra_instruction,
+                    "score": score.score,
+                    "engagement_drive": state.engagement_drive if state else 0,
+                    "permission_denied": False,
                 })
 
-            _log("AI_CALL", {
-                "npc_id": npc_id,
-                "score": score.score,
-                "engagement_drive": state.engagement_drive if state else 0,
-                "permission_denied": False,
-            })
+                # Volej AI
+                response = ai_call_fn(npc_id, world_event, extra_instruction)
 
-            # Volej AI
-            response = ai_call_fn(npc_id, world_event, extra_instruction)
+                if response:
+                    _log("AI_RESPONSE", {
+                        "npc_id": npc_id,
+                        "type": response.response_type.value,
+                        "text_preview": response.text[:50] if response.text else "",
+                    })
 
-            if response:
-                _log("AI_RESPONSE", {
-                    "npc_id": npc_id,
-                    "type": response.response_type.value,
-                    "text_preview": response.text[:50] if response.text else "",
-                })
+                    result = self._process_response(response, world_event)
+                    break  # Konec smyčky, jdeme na společný on_turn_end()
 
-                # Zpracuj odpověď
-                result = self._process_response(response, world_event)
-                self._scene_context.on_turn_end()
-                return result
+            # Pokud smyčka proběhla bez výsledku -> ticho
+            if result is None:
+                self._scene_context.on_silence()
 
-        # Žádná validní odpověď
-        self._scene_context.on_silence()
+        # === JEDINÉ MÍSTO kde se volá on_turn_end() ===
         self._scene_context.on_turn_end()
-        return None
+        return result
 
     def _process_response(
         self,
@@ -386,17 +460,46 @@ class BehaviorEngine:
         state = self._npc_states.get(npc_id)
 
         if response.is_speech():
+            # === HARD ANTI-DUPLICATION CHECK ===
+            # Pokud NPC vygeneruje identický text jako jeho poslední speech -> reject
+            last_speech_by_npc = self._get_last_speech_by_npc(npc_id)
+            if last_speech_by_npc:
+                normalized_new = self._normalize_text(response.text)
+                normalized_old = self._normalize_text(last_speech_by_npc)
+                if normalized_new == normalized_old:
+                    _log("HARD_DUPLICATE_REJECT", {
+                        "npc_id": npc_id,
+                        "text_preview": response.text[:50] if response.text else "",
+                    })
+                    # Reject -> vrať ACTION místo NOTHING (aby něco dělal)
+                    generic_actions = [
+                        "Podívá se na moře.",
+                        "Zamyšleně přikývne.",
+                        "Pozoruje okolí.",
+                    ]
+                    response = NPCResponse(
+                        npc_id=npc_id,
+                        response_type=ResponseType.ACTION,
+                        text=random.choice(generic_actions)
+                    )
+                    # Přidej do historie a vrať
+                    self._append_to_history(npc_id, "action", response.text)
+                    self._scene_context.on_action()
+                    if state:
+                        state.on_acted(self._scene_context.turn_number)
+                    return response
+
             # Post-check anti-repetition (PŘED záznamem, aby se nepenalizoval sám sebou)
             rejection_action = self.anti_rep.get_rejection_action(npc_id, response.text)
 
-            # DŮLEŽITÉ: Zaznamenej speech VŽDY (i při downgrade)
-            # Tím se penalizuje opakování v dalších replikách
-            self.anti_rep.record_speech(npc_id, response.text)
+            # OPRAVA: record_speech() se volá AŽ KDYŽ je finální typ speech (dole)
+            # Při downgrade/reject se nevolá - protože speech se neřekla
 
             if rejection_action == "reject":
                 # Úplné odmítnutí - změň na nothing
                 _log("ANTI_REP_REJECT", {"npc_id": npc_id, "action": "reject"})
                 response = NPCResponse(npc_id=npc_id, response_type=ResponseType.NOTHING)
+                self._append_to_history(npc_id, "nothing", "")
                 self._scene_context.on_nothing()
                 # on_turn_end() se volá v process_turn(), ne tady
                 if state:
@@ -444,27 +547,49 @@ class BehaviorEngine:
             self._scene_context.on_speech()
             self._assisted_active = False  # Reset assisted modu
 
-            # record_speech už voláno nahoře před post-check
+            # OPRAVA: record_speech() se volá AŽ TADY - když speech prošla
+            self.anti_rep.record_speech(npc_id, response.text)
 
-            # Ulož pro další tah
+            # Přidej do historie
+            self._append_to_history(npc_id, "speech", response.text)
+
+            # Update consecutive speaker count
+            if self._last_speaker_id == npc_id:
+                self._consecutive_speaker_count += 1
+            else:
+                self._consecutive_speaker_count = 1
+
+            # Ulož pro další tah (zachováno pro kompatibilitu)
             self._last_speaker_id = npc_id
             self._last_response_text = response.text
 
         elif response.response_type == ResponseType.THOUGHT:
             # Myšlenka - menší aktivita
+            self._append_to_history(npc_id, "thought", response.text)
             self._scene_context.on_thought()
             if state:
                 state.on_acted(self._scene_context.turn_number)
+            # OPRAVA: THOUGHT není speech -> resetuj consecutive counter
+            self._last_speaker_id = None
+            self._consecutive_speaker_count = 0
 
         elif response.response_type == ResponseType.ACTION:
             # Akce - střední aktivita
+            self._append_to_history(npc_id, "action", response.text)
             self._scene_context.on_action()
             if state:
                 state.on_acted(self._scene_context.turn_number)
+            # OPRAVA: ACTION není speech -> resetuj consecutive counter
+            self._last_speaker_id = None
+            self._consecutive_speaker_count = 0
 
         elif response.response_type == ResponseType.NOTHING:
             # Úplná nečinnost - NPC nic nedělá, NENÍ to akce
+            self._append_to_history(npc_id, "nothing", "")
             self._scene_context.on_nothing()
+            # OPRAVA: NOTHING není speech -> resetuj consecutive counter
+            self._last_speaker_id = None
+            self._consecutive_speaker_count = 0
 
         elif response.is_leaving():
             # Goodbye - NPC chce odejít (speech + odchod)
@@ -472,6 +597,14 @@ class BehaviorEngine:
                 state.stay_drive = 0.0
             self._scene_context.on_speech()
             self.anti_rep.record_speech(npc_id, response.text)
+            self._append_to_history(npc_id, "goodbye", response.text)
+
+            # Update consecutive speaker count
+            if self._last_speaker_id == npc_id:
+                self._consecutive_speaker_count += 1
+            else:
+                self._consecutive_speaker_count = 1
+
             self._last_speaker_id = npc_id
             self._last_response_text = response.text
 

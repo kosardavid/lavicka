@@ -413,6 +413,26 @@ score = speak_drive * energy
       + engagement bonus/penalizace (viz níže)
 ```
 
+**Max consecutive speaker (v3.6):**
+```python
+# Žádné NPC nemůže mluvit víc než 2x za sebou
+max_consecutive_speaker = 2
+
+# Před AI voláním:
+if _last_speaker_id == npc_id and _consecutive_speaker_count >= 2:
+    -> vrať ACTION bez AI volání
+
+# Po SPEECH:
+if _last_speaker_id == npc_id:
+    _consecutive_speaker_count += 1
+else:
+    _consecutive_speaker_count = 1
+
+# Po THOUGHT/ACTION/NOTHING se counter RESETUJE:
+_last_speaker_id = None
+_consecutive_speaker_count = 0
+```
+
 **Engagement v scoringu (v3.5):**
 ```python
 # Vysoký engagement (≥ 0.5) = bonus
@@ -474,19 +494,24 @@ _extract_start("Ano, máte pravdu.") -> "ano"
 
 **Post-check:** Po AI odpovědi kontrola a případný downgrade.
 
-**DŮLEŽITÉ - record_speech se volá VŽDY:**
+**DŮLEŽITÉ - record_speech se volá POUZE pro finální speech:**
 ```python
 # V _process_response:
 if response.is_speech():
-    # 1. Nejdřív zkontroluj penalizaci (proti stávající historii)
+    # 1. HARD DUPLICATE CHECK - identický text jako minule?
+    last_speech = _get_last_speech_by_npc(npc_id)
+    if normalize(response.text) == normalize(last_speech):
+        -> downgrade na ACTION, BEZ record_speech
+
+    # 2. Anti-rep check (proti stávající historii)
     rejection_action = anti_rep.get_rejection_action(npc_id, text)
+    if rejection_action != "accept":
+        -> downgrade/reject, BEZ record_speech
 
-    # 2. VŽDY zaznamenej do historie (i při downgrade/reject)
+    # 3. AŽ TADY (finální speech) se volá record_speech
     anti_rep.record_speech(npc_id, text)
-
-    # 3. Pak proveď akci (accept/downgrade/reject)
 ```
-Tím se zajistí, že i downgraded/rejected repliky ovlivňují budoucí penalizace.
+Tím se nezanáší anti-repetition tracker downgraded/rejected replikami.
 
 ```python
 def get_rejection_action(npc_id, proposed_text) -> str:

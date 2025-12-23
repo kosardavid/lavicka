@@ -7,10 +7,10 @@
     "historie": []
   },
   "babicka_vlasta__manazer_petr": {
-    "faze": "tvare",
+    "faze": "znami",
     "tykani": false,
-    "sympatie": 0.3,
-    "pocet_setkani": 15,
+    "sympatie": 0.46000000000000013,
+    "pocet_setkani": 23,
     "historie": []
   },
   "babicka_vlasta__delnik_franta": {
@@ -23,8 +23,8 @@
   "delnik_franta__rebelka_adela": {
     "faze": "znami",
     "tykani": false,
-    "sympatie": 0.4200000000000001,
-    "pocet_setkani": 21,
+    "sympatie": 0.8600000000000004,
+    "pocet_setkani": 43,
     "historie": []
   },
   "bezdomovec_lojza__delnik_franta": {
@@ -44,8 +44,8 @@
   "babicka_vlasta__bezdomovec_lojza": {
     "faze": "znami",
     "tykani": false,
-    "sympatie": 0.5800000000000002,
-    "pocet_setkani": 29,
+    "sympatie": 0.8400000000000004,
+    "pocet_setkani": 42,
     "historie": []
   },
   "bezdomovec_lojza__manazer_petr": {

@@ -1,112 +1,139 @@
 ===========================================
-BEHAVIOR ENGINE v3.5 - REVIEW PRO CHATGPT
+BEHAVIOR ENGINE v3.6 - REVIEW PRO CHATGPT
 ===========================================
 Datum: 2025-12-23
-Verze: v3.5 (opravy z ChatGPT review v3.4)
+Verze: v3.6 (opravy z Claude Code review)
 
-ZMĚNY OD v3.4:
+ZMENY OD v3.5:
 
-1. NOVÉ: Engagement v scoringu
-   - Vysoký engagement (≥ 0.5) = bonus: +0.15 * (eng - 0.5) * 2
-   - Nízký engagement (< 0.25) = penalizace: -0.20 * (0.25 - eng) * 4
-   - Tím se TOP_K častěji vybírá ten, kdo má právo mluvit
+1. OPRAVA: Reset _consecutive_speaker_count pri non-speech
+   - THOUGHT, ACTION, NOTHING nyni resetuji _last_speaker_id a _consecutive_speaker_count
+   - Tim se umozni NPC znovu mluvit po pauze (ne "uz mluvil 2x")
 
-2. ZMĚNA: Cap engagement growth per turn
-   - Max růst za tah: +0.45
-   - Addressed + question používá max() místo sčítání
-   - Zabraňuje +0.60 skokům
+2. OPRAVA: Hard duplicate check
+   - Pokud NPC vygeneruje identicky text jako jeho posledni speech -> downgrade na ACTION
+   - Pouziva _normalize_text() pro porovnani (lowercase, bez interpunkce)
 
-3. ZMĚNA: unaddressed_decay snížen
-   - Původně: 0.08
-   - Teď: 0.06 (méně agresivní)
+3. OPRAVA: _history jako single source of truth
+   - Vsechny odpovedi se ukladaji do _history
+   - _get_last_text_from_history() a _get_last_speaker_from_history() ctou z historie
 
-4. ZMĚNA: detect_question_to_npc pro 2 NPC
-   - Pro 2 NPC: každá otázka "?" je automaticky na druhého
-   - Pro 3+ NPC: vyžaduje oslovení (jako dřív)
+4. OPRAVA: record_speech() pouze pro finalni speech
+   - Pokud je speech downgradeovana na thought/action, record_speech() se NEVOLA
+   - Tim se nezanasi anti-repetition tracker
+
+5. OPRAVA: on_turn_end() pouze jednou
+   - Vsechny vetve process_turn() konci na jedinem miste kde se vola on_turn_end()
 
 ===========================================
-AKTUÁLNÍ ARCHITEKTURA
+AKTUALNI ARCHITEKTURA
 ===========================================
 
 ```
 process_turn():
-    1. Update stavů (on_turn_start)
+    1. Update stavu (on_turn_start)
     2. Generuj WorldEvent
-    3. Pro každé NPC:
-       a. Detekuj oslovení/otázku
+    3. Pro kazde NPC:
+       a. Detekuj osloveni/otazku
        b. Update drives (speak, stay, engagement)
-    4. Skóruj NPC a vyber TOP K (včetně engagement bonus/penalty)
-    5. Pro každé NPC v TOP K:
+    4. Skoruj NPC a vyber TOP K (vcetne engagement bonus/penalty)
+    5. Pro kazde NPC v TOP K:
        a. state.on_selected(turn)
        b. === PERMISSION GATE ===
           - Pokud engagement < 0.25 AND speak < 0.65:
-            - Vrať ACTION nebo NOTHING bez AI volání
-       c. Zavolej AI
-       d. Pokud response:
+            - Vrat ACTION nebo NOTHING bez AI volani
+       c. === MAX CONSECUTIVE SPEAKER ===
+          - Pokud tento NPC uz mluvil 2x za sebou:
+            - Vrat ACTION bez AI volani
+       d. Zavolej AI
+       e. Pokud response:
           - result = _process_response(response, event)
-          - scene_context.on_turn_end()  ← JEDNOU tady
-          - return result
-    6. Žádná odpověď:
+          - break (jdi na spolecny on_turn_end)
+    6. Zadna odpoved:
        - scene_context.on_silence()
-       - scene_context.on_turn_end()  ← JEDNOU tady
-       - return None
+    7. === JEDINE MISTO on_turn_end() ===
+       - scene_context.on_turn_end()
+       - return result
 ```
 
 ===========================================
-ENGAGEMENT DRIVE - AKTUÁLNÍ PRAVIDLA
+_process_response() FLOW
 ===========================================
 
-engagement_drive ROSTE při:
-- Přímé oslovení jménem/titulem: +0.35
-- Otázka směřovaná na NPC: +0.25 (použije se max, ne součet!)
-- PRESSURE event cílící na NPC: +0.10 * intensity
-- **Cap:** max +0.45 růst za tah
-
-engagement_drive KLESÁ při:
-- SILENCE (bez oslovení): -0.05
-- NPC bylo vybráno ale ne osloveno (minulý tah): -0.06
-
 ```python
-def _update_engagement_drive(...):
-    original_drive = state.engagement_drive
-    drive = original_drive
+def _process_response(response, world_event):
+    if response.is_speech():
+        # 1. HARD DUPLICATE CHECK
+        last_speech = _get_last_speech_by_npc(npc_id)
+        if normalize(response.text) == normalize(last_speech):
+            -> downgrade na ACTION, return
 
-    # 1+2. Přímé oslovení + Otázka -> použij MAX (ne součet!)
-    address_boost = 0.0
-    if was_addressed:
-        address_boost = 0.35
-        state.on_addressed(turn)
-    if was_asked_question:
-        address_boost = max(address_boost, 0.25)  # MAX!
-        state.on_addressed(turn)
-    drive += address_boost
+        # 2. ANTI-REPETITION CHECK
+        action = anti_rep.get_rejection_action(npc_id, response.text)
+        if action == "reject":
+            -> zmena na NOTHING, return
+        elif action == "downgrade_to_thought":
+            -> zmena na THOUGHT
+        elif action == "downgrade_to_action":
+            -> zmena na ACTION
 
-    # 3. PRESSURE -> mírný boost
-    if PRESSURE and target == npc_id:
-        drive += 0.10 * intensity
+    # 3. ZPRACUJ PODLE FINALNIHO TYPU
+    if speech:
+        state.on_spoke()
+        scene_context.on_speech()
+        anti_rep.record_speech()  # AZ TADY!
+        _append_to_history("speech")
+        # Update consecutive:
+        if _last_speaker_id == npc_id:
+            _consecutive_speaker_count += 1
+        else:
+            _consecutive_speaker_count = 1
+        _last_speaker_id = npc_id
 
-    # 4. SILENCE -> decay
-    if SILENCE and not addressed:
-        drive -= 0.05
+    elif thought:
+        state.on_acted()
+        scene_context.on_thought()
+        _append_to_history("thought")
+        # RESET consecutive:
+        _last_speaker_id = None
+        _consecutive_speaker_count = 0
 
-    # 5. Vybráno ale ne osloveno -> decay
-    if last_selected == turn - 1 and last_addressed < last_selected:
-        drive -= 0.06
+    elif action:
+        state.on_acted()
+        scene_context.on_action()
+        _append_to_history("action")
+        # RESET consecutive:
+        _last_speaker_id = None
+        _consecutive_speaker_count = 0
 
-    # 6. CAP růstu za tah
-    growth = drive - original_drive
-    if growth > 0.45:
-        drive = original_drive + 0.45
-
-    state.engagement_drive = clamp(drive, 0, 1)
+    elif nothing:
+        scene_context.on_nothing()
+        _append_to_history("nothing")
+        # RESET consecutive:
+        _last_speaker_id = None
+        _consecutive_speaker_count = 0
 ```
 
 ===========================================
-SCORER - AKTUÁLNÍ VÝPOČET
+ENGAGEMENT DRIVE - AKTUALNI PRAVIDLA
+===========================================
+
+engagement_drive ROSTE pri:
+- Prime osloveni jmenem/titulem: +0.35
+- Otazka smerovana na NPC: +0.25 (pouzije se max, ne soucet!)
+- PRESSURE event cilici na NPC: +0.10 * intensity
+- **Cap:** max +0.45 rust za tah
+
+engagement_drive KLESA pri:
+- SILENCE (bez osloveni): -0.05
+- NPC bylo vybrano ale ne osloveno (minuly tah): -0.06
+
+===========================================
+SCORER - AKTUALNI VYPOCET
 ===========================================
 
 ```python
-score = speak_drive * energy           # Základ
+score = speak_drive * energy           # Zaklad
       + 0.4 * intensity                # PRESSURE bonus
       + 0.2 * intensity * mluvnost     # STIMULUS bonus
       - 0.3 * cooldown_turns           # Cooldown penalty
@@ -114,9 +141,9 @@ score = speak_drive * energy           # Základ
       - 0.3 * anti_rep_penalty         # Repetition penalty
       - just_acted_penalty             # -0.25 / -0.125
       - just_selected_penalty          # -0.15 / -0.075
-      + engagement_mod                 # NOVÉ v3.5
+      + engagement_mod                 # Engagement bonus/penalty
 
-# Engagement modifikátor:
+# Engagement modifikator:
 if engagement >= 0.5:
     engagement_mod = +0.15 * (engagement - 0.5) * 2  # max +0.15
 elif engagement < 0.25:
@@ -126,136 +153,106 @@ else:
 ```
 
 ===========================================
-DETECT_QUESTION_TO_NPC - AKTUÁLNÍ LOGIKA
+MAX CONSECUTIVE SPEAKER
 ===========================================
 
 ```python
-def detect_question_to_npc(text, npc_name, npc_titul, total_npcs_in_scene=2):
-    if "?" not in text:
-        return False
-
-    # Pro 2 NPC: každá otázka je automaticky na druhého
-    if total_npcs_in_scene == 2:
-        return True
-
-    # Pro 3+ NPC: vyžaduje oslovení
-    return detect_addressing(text, npc_name, npc_titul)
+# V process_turn(), PRED AI volanim:
+if _last_speaker_id == npc_id and _consecutive_speaker_count >= 2:
+    # Vrat ACTION bez AI volani
+    return ACTION("Chvili mlci a pozoruje okoli.")
 ```
 
-Test výsledky:
-- "Jak se máte?" (2 NPC) -> True
-- "Jak se máte?" (3 NPC) -> False
-- "Babičko, jak se máte?" (3 NPC) -> True
+Toto zajistuje, ze zadne NPC nemuze mluvit vic nez 2x za sebou.
+Po ACTION/THOUGHT/NOTHING se counter RESETUJE na 0.
 
 ===========================================
-PERMISSION GATE - AKTUÁLNÍ LOGIKA
+HARD DUPLICATE CHECK
 ===========================================
 
 ```python
-if state.engagement_drive < 0.25 and state.speak_drive < 0.65:
-    # Přeskoč AI volání
-    if state.speak_drive > 0.45:
-        return ACTION(random.choice(generic_actions))
-    else:
-        return NOTHING
+# V _process_response(), PRED anti-rep checkem:
+last_speech = _get_last_speech_by_npc(npc_id)
+if last_speech:
+    if _normalize_text(response.text) == _normalize_text(last_speech):
+        # Identicky text -> downgrade na ACTION
+        return ACTION("Podiva se na more.")
+
+def _normalize_text(text):
+    normalized = text.lower().strip()
+    normalized = re.sub(r'\s+', ' ', normalized)
+    normalized = re.sub(r'[,.;:!?..."\']+$', '', normalized)
+    return normalized
 ```
 
-Generic actions:
-- "Pozoruje okolí."
-- "Zamyšleně se dívá na moře."
-- "Pousměje se."
-
 ===========================================
-on_turn_end() - POTVRZENO SPRÁVNÉ
+ANTI-REPETITION PRAHY
 ===========================================
 
-on_turn_end() se volá JEDNOU za tah v process_turn():
-- Po Permission Gate větvi (řádek 337)
-- Po AI odpovědi (řádek 370)
-- Po žádné odpovědi (řádek 375)
+```python
+penalty = anti_rep.get_penalty(npc_id, text)
 
-_process_response() NEVOLÁ on_turn_end() - to je správně.
-
-===========================================
-SOUBORY ZMĚNĚNÉ V v3.5
-===========================================
-
-1. game/engine/scorer.py
-   - Přidány engagement_bonus a low_engagement_penalty parametry
-   - Přidán engagement_mod do výpočtu skóre
-
-2. game/engine/drive_update.py
-   - engagement_unaddressed_decay: 0.08 -> 0.06
-   - engagement_max_growth_per_turn: 0.45 (nový parametr)
-   - addressed + question používá max() místo sčítání
-   - Cap na růst za tah
-
-3. game/engine/behavior_engine.py
-   - detect_question_to_npc předává total_npcs_in_scene
+if penalty < 0.4:
+    return "accept"           # Projde
+elif penalty < 0.6:
+    return "downgrade_to_thought"
+elif penalty < 0.8:
+    return "downgrade_to_action"
+else:
+    return "reject"           # Zmena na NOTHING
+```
 
 ===========================================
-TESTY - VŠECHNY PROŠLY
+TESTY - VSECHNY PROSLY
 ===========================================
 
-Test 1: Engagement v scoreru
-- High engagement (0.7): engagement_mod = +0.060
-- Low engagement (0.15): engagement_mod = -0.080
+Test 1: Hard duplicate detection
+- Input: 2x identicky text
+- Output: 1. speech, 2. action
+- PASSED
 
-Test 2: Cap na engagement growth
-- Po addressed+question+pressure: 0.75 (capped)
-- Po addressed only: 0.65
+Test 2: Reset consecutive pri ACTION
+- Input: speech, speech (-> action kvuli anti-rep), speech
+- Output: count se spravne resetuje
+- PASSED
 
-Test 3: detect_question pro 2 NPC
-- "Jak se máte?" (2 NPC): True
-- "Jak se máte?" (3 NPC): False
-- "Karle, jak se máte?" (3 NPC): True
-
-===========================================
-ZMĚNY OD PŘEDCHOZÍCH VERZÍ (souhrn)
-===========================================
-
-v3.5:
-- Engagement v scoringu (bonus/penalizace)
-- Cap engagement growth per turn na +0.45
-- unaddressed_decay snížen na 0.06
-- detect_question: pro 2 NPC stačí "?"
-- max() místo sčítání pro addressed+question
-
-v3.4:
-- engagement_drive ("sociální povolení")
-- Permission Gate před AI voláním
-- detect_question_to_npc()
-- last_addressed_turn tracking
-
-v3.3:
-- on_turn_end() pouze jednou v process_turn()
-- last_selected_turn + just_selected_penalty
-- detect_addressing() s regex (ne substring)
-
-v3.2:
-- just_acted_penalty pro střídání NPC
-- last_acted_turn tracking
-- nothing se nepočítá jako akce
-
-v3.1:
-- record_speech se volá VŽDY (i při downgrade/reject)
-
-v3.0:
-- Anti-repetition sleduje začátky replik
-- Detekce vokativů pro češtinu
+Test 3: Max consecutive speaker
+- Input: 3x speech od stejneho NPC
+- Output: 1. speech (count=1), 2. speech (count=2), 3. action (blocked)
+- PASSED
 
 ===========================================
-OTÁZKY PRO REVIEW
+ZNAME LIMITACE
 ===========================================
 
-1. Je engagement v scoringu správně nastavený?
-   - bonus: +0.15 při eng ≥ 0.5
-   - penalizace: -0.20 při eng < 0.25
+1. Anti-repetition muze byt prilis citlivy
+   - Repliky sdilici bezna slova (more, klid, pohled) mohou byt penalizovany
+   - Mozna zvysit prahy nebo upravit _extract_phrases()
 
-2. Je cap +0.45 na růst engagement vhodný?
-   - Nebo by měl být nižší (třeba +0.40)?
+2. "Prave rekl/a" ukazuje posledni SPEECH od souseda
+   - Pokud soused dela jen thought/action, neupdatuje se
+   - To je zamerne (ukazuje posledni vyrok), ale muze byt matouci
 
-3. Je logika max(addressed, question) správná?
-   - Alternativa: addressed se sčítá, ale question ne?
+===========================================
+SOUBORY ZMENENE V v3.6
+===========================================
 
-4. Další návrhy na zlepšení?
+1. game/engine/behavior_engine.py
+   - Reset _consecutive_speaker_count pri THOUGHT/ACTION/NOTHING
+   - Hard duplicate check pred anti-rep
+   - _history jako single source of truth
+
+===========================================
+OTAZKY PRO REVIEW
+===========================================
+
+1. Je logika spravna?
+   - Hard duplicate -> downgrade na ACTION
+   - Anti-rep downgrade -> reset consecutive counter
+
+2. Mame nejaky edge case ktery jsme prehledly?
+   - Napriklad: co kdyz AI vrati prazdny text?
+
+3. Je anti-repetition prilis agresivni?
+   - Mozna zvysit prahy (0.4 -> 0.5, 0.6 -> 0.7)?
+
