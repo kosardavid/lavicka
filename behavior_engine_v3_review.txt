@@ -1,8 +1,19 @@
 ===========================================
-BEHAVIOR ENGINE v3.1 - REVIEW PRO CHATGPT
+BEHAVIOR ENGINE v3.2 - REVIEW PRO CHATGPT
 ===========================================
 Datum: 2025-12-23
-Verze: v3.1 (oprava record_speech při downgrade)
+Verze: v3.2 (just_acted penalizace pro střídání NPC)
+
+ZMĚNY OD v3.1:
+1. NOVÉ: Penalizace za právě provedenou akci ve scoreru
+   - Pokud NPC udělalo action/thought tento tah: -0.25 penalizace
+   - Pokud NPC udělalo action/thought minulý tah: -0.125 penalizace
+   - "nothing" se NEPOČÍTÁ jako akce (NPC které mlčí může být znovu vybráno)
+   - Řeší problém: jedno NPC bylo vybíráno 15+ krát za sebou
+
+2. NOVÉ: last_acted_turn v NPCBehaviorState
+   - Sleduje kdy NPC naposledy udělalo jakoukoliv akci
+   - on_acted() se volá pro thought/action odpovědi
 
 ZMĚNY OD v3:
 1. OPRAVA: record_speech se nyní volá VŽDY, i při downgrade/reject
@@ -356,7 +367,44 @@ def detect_addressing(last_response_text: str, npc_name: str, npc_titul: str = "
 
 
 ===========================================
-KLÍČOVÁ ZMĚNA: behavior_engine.py
+KLÍČOVÁ ZMĚNA v3.2: scorer.py
+===========================================
+
+Nová penalizace za právě provedenou akci:
+
+```python
+# V score_npc():
+just_acted = 0.0
+if state.last_acted_turn >= 0:
+    turns_since_acted = current_turn - state.last_acted_turn
+    if turns_since_acted == 0:
+        # Právě udělal akci tento tah - vysoká penalizace
+        just_acted = -self.just_acted_penalty  # -0.25
+    elif turns_since_acted == 1:
+        # Udělal akci minulý tah - mírná penalizace
+        just_acted = -self.just_acted_penalty * 0.5  # -0.125
+
+total = base + pressure + stimulus + cooldown + energy_pen + anti_rep + just_acted
+```
+
+V behavior_engine.py se volá on_acted() pro thought/action:
+```python
+elif response.response_type == ResponseType.THOUGHT:
+    self._scene_context.on_thought()
+    if state:
+        state.on_acted(self._scene_context.turn_number)
+
+elif response.response_type == ResponseType.ACTION:
+    self._scene_context.on_action()
+    if state:
+        state.on_acted(self._scene_context.turn_number)
+
+# POZOR: NOTHING nevolá on_acted() - není to akce!
+```
+
+
+===========================================
+KLÍČOVÁ ZMĚNA v3.1: behavior_engine.py
 ===========================================
 
 V _process_response se nyní record_speech volá VŽDY:
@@ -430,4 +478,9 @@ OTÁZKY PRO REVIEW
 4. Jsou vokativní pravidla kompletní pro češtinu?
    - Aktuálně: -a->-o, -ek->-ku, -ka->-ko, souhláska+e, -el->-le
 
-5. Další návrhy na zlepšení?
+5. Je just_acted_penalty (0.25) správná hodnota?
+   - Tento tah: -0.25 (vysoká)
+   - Minulý tah: -0.125 (mírná)
+   - "nothing" se nepočítá jako akce
+
+6. Další návrhy na zlepšení?

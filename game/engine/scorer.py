@@ -28,11 +28,13 @@ class SpeakScorer:
         stimulus_bonus: float = 0.2,
         cooldown_penalty: float = 0.3,
         low_energy_penalty: float = 0.2,
+        just_acted_penalty: float = 0.25,  # Penalizace za právě provedenou akci
     ):
         self.pressure_bonus = pressure_bonus
         self.stimulus_bonus = stimulus_bonus
         self.cooldown_penalty = cooldown_penalty
         self.low_energy_penalty = low_energy_penalty
+        self.just_acted_penalty = just_acted_penalty
 
     def score_npc(
         self,
@@ -40,6 +42,7 @@ class SpeakScorer:
         world_event: WorldEvent,
         npc_data: Dict,
         anti_rep_penalty: float = 0.0,
+        current_turn: int = 0,
     ) -> NPCScore:
         """
         Vypočítá skóre pro jedno NPC.
@@ -49,6 +52,7 @@ class SpeakScorer:
             world_event: Aktuální světová událost
             npc_data: Data NPC z postavy.json (pro povahu)
             anti_rep_penalty: Penalizace za opakování (0-1)
+            current_turn: Aktuální číslo tahu
 
         Returns:
             NPCScore s celkovým skóre a rozpadem
@@ -91,8 +95,21 @@ class SpeakScorer:
         anti_rep = -anti_rep_penalty * 0.3
         breakdown["anti_rep"] = anti_rep
 
+        # Penalizace za právě provedenou akci (v tomto nebo minulém tahu)
+        # Aby se NPC nestřídalo samo se sebou
+        just_acted = 0.0
+        if state.last_acted_turn >= 0:
+            turns_since_acted = current_turn - state.last_acted_turn
+            if turns_since_acted == 0:
+                # Právě udělal akci tento tah - vysoká penalizace
+                just_acted = -self.just_acted_penalty
+            elif turns_since_acted == 1:
+                # Udělal akci minulý tah - mírná penalizace
+                just_acted = -self.just_acted_penalty * 0.5
+        breakdown["just_acted"] = just_acted
+
         # Celkové skóre
-        total = max(0.0, base + pressure + stimulus + cooldown + energy_pen + anti_rep)
+        total = max(0.0, base + pressure + stimulus + cooldown + energy_pen + anti_rep + just_acted)
         breakdown["total"] = total
 
         return NPCScore(
@@ -108,6 +125,7 @@ class SpeakScorer:
         npc_data_map: Dict[str, Dict],
         anti_rep_penalties: Dict[str, float],
         k: int = 1,
+        current_turn: int = 0,
     ) -> List[NPCScore]:
         """
         Vybere TOP K NPC s nejvyšším skóre.
@@ -118,6 +136,7 @@ class SpeakScorer:
             npc_data_map: Slovník dat NPC (id -> data z postavy.json)
             anti_rep_penalties: Penalizace za opakování pro každé NPC
             k: Kolik NPC vybrat
+            current_turn: Aktuální číslo tahu
 
         Returns:
             Seznam TOP K NPCScore, seřazený od nejvyššího
@@ -131,7 +150,7 @@ class SpeakScorer:
             npc_data = npc_data_map.get(npc_id, {})
             anti_rep = anti_rep_penalties.get(npc_id, 0.0)
 
-            score = self.score_npc(state, world_event, npc_data, anti_rep)
+            score = self.score_npc(state, world_event, npc_data, anti_rep, current_turn)
             scores.append(score)
 
         # Seřaď podle skóre sestupně

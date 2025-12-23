@@ -284,6 +284,7 @@ class NPCBehaviorState:
     stay_drive: float = 0.7       # Jak moc chce zůstat (0-1) - DYNAMICKY SE MĚNÍ
     cooldown_turns: int = 0       # Kolik tahů musí čekat
     energy: float = 1.0           # Energie (0-1)
+    last_acted_turn: int = -1     # Poslední tah kdy udělal COKOLI (speech/action/thought)
 
 class ResponseType(Enum):
     SPEECH = "speech"       # Mluvená replika
@@ -366,6 +367,22 @@ score = speak_drive * energy
       - penalizace za cooldown (0.3 * cooldown_turns)
       - penalizace za nízkou energii
       - penalizace za opakování (0.3 * anti_rep)
+      - penalizace za právě provedenou akci (just_acted)
+```
+
+**Penalizace za právě provedenou akci (NOVÉ):**
+```python
+# Aby se jedno NPC nestřídalo samo se sebou
+# (např. 15x action za sebou bez šance pro druhé NPC)
+if last_acted_turn == current_turn:
+    just_acted = -0.25  # Tento tah = vysoká penalizace
+elif last_acted_turn == current_turn - 1:
+    just_acted = -0.125  # Minulý tah = mírná penalizace
+else:
+    just_acted = 0  # 2+ tahy = žádná penalizace
+
+# POZOR: "nothing" se NEPOČÍTÁ jako akce!
+# NPC které mlčí může být znovu vybráno.
 ```
 
 #### Anti-Repetition (anti_repetition.py)

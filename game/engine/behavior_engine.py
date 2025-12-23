@@ -244,6 +244,7 @@ class BehaviorEngine:
             self._npc_data_map,
             anti_rep_penalties,
             k=self.top_k,
+            current_turn=self._scene_context.turn_number,
         )
 
         # Loguj všechny skóre
@@ -390,13 +391,17 @@ class BehaviorEngine:
         elif response.response_type == ResponseType.THOUGHT:
             # Myšlenka - menší aktivita
             self._scene_context.on_thought()
+            if state:
+                state.on_acted(self._scene_context.turn_number)
 
         elif response.response_type == ResponseType.ACTION:
             # Akce - střední aktivita
             self._scene_context.on_action()
+            if state:
+                state.on_acted(self._scene_context.turn_number)
 
         elif response.response_type == ResponseType.NOTHING:
-            # Úplná nečinnost
+            # Úplná nečinnost - NPC nic nedělá, NENÍ to akce
             self._scene_context.on_nothing()
 
         elif response.is_leaving():
