@@ -1,0 +1,1462 @@
+================================================================================
+BEHAVIOR ENGINE V1 - KOMPLETNÍ KÓD PRO REVIEW
+================================================================================
+Projekt: Lavička nad mořem
+Popis: NPC simulace rozhovorů s lokálním LLM (Pygame)
+
+PŘEHLED ZMĚN:
+- Director generuje jen WORLD EVENT (STIMULUS/PRESSURE/SILENCE), ne repliky
+- NPC rozhodují sami na základě speak_drive, stay_drive, cooldown, energy
+- TOP K=1 NPC jde do AI za tah
+- Nové typy odpovědí: action, nothing (+ speech, thought, goodbye)
+- Anti-repetition tracking
+- ASSISTED mód když scéna "umírá"
+- DEV_INTENT_LOG pro debugging
+
+================================================================================
+SOUBOR: game/engine/types.py
+================================================================================
+
+"""
+Datové typy pro Behavior Engine.
+"""
+
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Optional, List
+
+
+class WorldEventType(Enum):
+    """Typ světové události."""
+    STIMULUS = "stimulus"    # Něco se stalo (racek, vítr, zvuk)
+    PRESSURE = "pressure"    # Tlak na reakci (otázka, oslovení)
+    SILENCE = "silence"      # Ticho - prostor pro iniciativu
+
+
+@dataclass
+class WorldEvent:
+    """Světová událost generovaná enginem."""
+    event_type: WorldEventType
+    description: str = ""
+    pressure_target: Optional[str] = None  # ID NPC pokud PRESSURE
+    intensity: float = 0.5  # 0.0-1.0, jak silná je událost
+
+
+@dataclass
+class NPCBehaviorState:
+    """Stav chování jednoho NPC."""
+    npc_id: str
+    speak_drive: float = 0.3      # Jak moc chce mluvit (0-1)
+    stay_drive: float = 0.7       # Jak moc chce zůstat (0-1)
+    cooldown_turns: int = 0       # Kolik tahů musí čekat před další replikou
+    energy: float = 1.0           # Energie (0-1), klesá po mluvení
+
+    # Statistiky pro skórování
+    speeches_count: int = 0       # Počet replik v této scéně
+    last_spoke_turn: int = -1     # Poslední tah kdy mluvil
+
+    def can_speak(self) -> bool:
+        """Může NPC mluvit?"""
+        return self.cooldown_turns <= 0 and self.energy > 0.1
+
+    def on_spoke(self, current_turn: int, energy_cost: float = 0.15) -> None:
+        """Zavoláno když NPC promluvil."""
+        self.speeches_count += 1
+        self.last_spoke_turn = current_turn
+        self.energy = max(0.0, self.energy - energy_cost)
+
+    def on_turn_start(self, energy_regen: float = 0.05) -> None:
+        """Zavoláno na začátku každého tahu."""
+        if self.cooldown_turns > 0:
+            self.cooldown_turns -= 1
+        self.energy = min(1.0, self.energy + energy_regen)
+
+
+class ResponseType(Enum):
+    """Typ odpovědi NPC."""
+    SPEECH = "speech"       # Mluvená replika
+    THOUGHT = "thought"     # Vnitřní myšlenka (v závorce)
+    ACTION = "action"       # Fyzická akce (kouká se, vstane...)
+    NOTHING = "nothing"     # Ticho, nic nedělá
+    GOODBYE = "goodbye"     # Loučí se a odchází
+
+
+@dataclass
+class NPCResponse:
+    """Odpověď NPC z AI."""
+    npc_id: str
+    response_type: ResponseType
+    text: str = ""
+
+    def is_speech(self) -> bool:
+        return self.response_type == ResponseType.SPEECH
+
+    def is_leaving(self) -> bool:
+        return self.response_type == ResponseType.GOODBYE
+
+
+@dataclass
+class AssistedOption:
+    """Možnost pro ASSISTED mód když scéna umírá."""
+    label: str           # Krátký popis pro uživatele
+    instruction: str     # Instrukce pro AI
+
+
+@dataclass
+class SceneContext:
+    """Kontext aktuální scény pro engine."""
+    turn_number: int = 0
+    last_speech_turn: int = 0
+    total_speeches: int = 0
+    scene_energy: float = 0.5
+    consecutive_silence: int = 0  # Počet tahů bez řeči
+
+    def on_speech(self) -> None:
+        """Zavoláno když někdo promluvil."""
+        self.last_speech_turn = self.turn_number
+        self.total_speeches += 1
+        self.consecutive_silence = 0
+        self.scene_energy = min(1.0, self.scene_energy + 0.1)
+
+    def on_silence(self) -> None:
+        """Zavoláno když nikdo nepromluvil."""
+        self.consecutive_silence += 1
+        self.scene_energy = max(0.0, self.scene_energy - 0.05)
+
+    def on_turn_end(self) -> None:
+        """Zavoláno na konci tahu."""
+        self.turn_number += 1
+
+    def is_dying(self) -> bool:
+        """Je scéna 'umírající'? (pro ASSISTED mód)"""
+        return self.consecutive_silence >= 2 and self.scene_energy < 0.15
+
+
+@dataclass
+class IntentLogEntry:
+    """Záznam pro DEV_INTENT_LOG."""
+    timestamp: float
+    action: str
+    details: dict = field(default_factory=dict)
+
+    def __str__(self) -> str:
+        return f"[{self.timestamp:.2f}] {self.action}: {self.details}"
+
+
+================================================================================
+SOUBOR: game/engine/behavior_engine.py
+================================================================================
+
+"""
+BehaviorEngine - hlavní orchestrátor nového systému chování NPC.
+
+Director generuje jen WORLD EVENT (STIMULUS/PRESSURE/SILENCE), ne repliky.
+NPC rozhodují sami na základě speak_drive, stay_drive, cooldown, energy.
+TOP K NPC jdou do AI, ostatní čekají nebo dělají scripted akce.
+"""
+
+import time
+import random
+from typing import Optional, List, Dict, Any, Callable
+
+from .types import (
+    WorldEvent,
+    WorldEventType,
+    NPCBehaviorState,
+    ResponseType,
+    NPCResponse,
+    AssistedOption,
+    SceneContext,
+    IntentLogEntry,
+)
+from .world_event import WorldEventGenerator, detect_question_target
+from .scorer import SpeakScorer, NPCScore
+from .anti_repetition import AntiRepetitionTracker
+
+
+# Globální DEV_INTENT_LOG pro debugging
+DEV_INTENT_LOG: List[IntentLogEntry] = []
+
+
+def _log(action: str, details: Dict = None) -> None:
+    """Přidá záznam do DEV_INTENT_LOG."""
+    entry = IntentLogEntry(
+        timestamp=time.time(),
+        action=action,
+        details=details or {},
+    )
+    DEV_INTENT_LOG.append(entry)
+
+    # Udržuj max 100 záznamů
+    if len(DEV_INTENT_LOG) > 100:
+        DEV_INTENT_LOG.pop(0)
+
+
+# Možnosti pro ASSISTED mód
+ASSISTED_OPTIONS: List[AssistedOption] = [
+    AssistedOption(
+        label="Začni nové téma",
+        instruction="Zkus přirozeně začít nové téma - může to být cokoliv co vidíš, slyšíš, nebo o čem přemýšlíš.",
+    ),
+    AssistedOption(
+        label="Zeptej se na něco osobního",
+        instruction="Zkus se jemně zeptat na něco osobního - práci, rodinu, koníčky.",
+    ),
+    AssistedOption(
+        label="Sdílej myšlenku nebo vzpomínku",
+        instruction="Sdílej nahlas nějakou myšlenku nebo vzpomínku, která tě právě napadla.",
+    ),
+]
+
+
+class BehaviorEngine:
+    """
+    Hlavní orchestrátor nového systému chování.
+
+    Koordinuje:
+    - WorldEventGenerator pro události
+    - SpeakScorer pro výběr TOP K NPC
+    - AntiRepetitionTracker proti opakování
+    - Stavy NPCBehaviorState
+    """
+
+    def __init__(
+        self,
+        top_k: int = 1,
+        cooldown_after_speech: int = 1,
+        energy_cost_speech: float = 0.15,
+        energy_regen_turn: float = 0.05,
+        min_score_to_speak: float = 0.15,
+    ):
+        self.top_k = top_k
+        self.cooldown_after_speech = cooldown_after_speech
+        self.energy_cost_speech = energy_cost_speech
+        self.energy_regen_turn = energy_regen_turn
+        self.min_score_to_speak = min_score_to_speak
+
+        # Komponenty
+        self.event_generator = WorldEventGenerator()
+        self.scorer = SpeakScorer()
+        self.anti_rep = AntiRepetitionTracker()
+
+        # Stav scény
+        self._npc_states: Dict[str, NPCBehaviorState] = {}
+        self._npc_data_map: Dict[str, Dict] = {}
+        self._scene_context: Optional[SceneContext] = None
+        self._last_speaker_id: Optional[str] = None
+        self._last_response_text: str = ""
+        self._assisted_active: bool = False
+
+    # === LIFECYCLE ===
+
+    def is_active(self) -> bool:
+        """Je engine aktivní (probíhá scéna)?"""
+        return self._scene_context is not None
+
+    def start_scene(self, npc_a: Dict, npc_b: Dict) -> None:
+        """
+        Inicializuje novou scénu.
+
+        Args:
+            npc_a: Data prvního NPC z postavy.json
+            npc_b: Data druhého NPC z postavy.json
+        """
+        _log("START_SCENE", {
+            "npc_a": npc_a.get("id"),
+            "npc_b": npc_b.get("id"),
+        })
+
+        # Inicializuj stavy
+        self._npc_states = {}
+        self._npc_data_map = {}
+
+        for npc in [npc_a, npc_b]:
+            npc_id = npc.get("id")
+            povaha = npc.get("povaha", {})
+
+            # Speak drive závisí na mluvnosti
+            mluvnost = povaha.get("mluvnost", 0.5)
+            speak_drive = 0.2 + mluvnost * 0.4  # 0.2 - 0.6
+
+            self._npc_states[npc_id] = NPCBehaviorState(
+                npc_id=npc_id,
+                speak_drive=speak_drive,
+                stay_drive=0.7,
+                cooldown_turns=0,
+                energy=1.0,
+            )
+            self._npc_data_map[npc_id] = npc
+
+        # Inicializuj kontext scény
+        self._scene_context = SceneContext()
+        self._last_speaker_id = None
+        self._last_response_text = ""
+        self._assisted_active = False
+
+        # Vyčisti anti-repetition
+        self.anti_rep.clear()
+
+    def end_scene(self) -> None:
+        """Ukončí aktuální scénu."""
+        _log("END_SCENE", {
+            "total_turns": self._scene_context.turn_number if self._scene_context else 0,
+            "total_speeches": self._scene_context.total_speeches if self._scene_context else 0,
+        })
+
+        self._npc_states.clear()
+        self._npc_data_map.clear()
+        self._scene_context = None
+        self._last_speaker_id = None
+        self._last_response_text = ""
+        self._assisted_active = False
+
+    # === MAIN PROCESSING ===
+
+    def process_turn(
+        self,
+        ai_call_fn: Callable[[str, WorldEvent, str], Optional[NPCResponse]],
+        forced_event: Optional[str] = None,
+    ) -> Optional[NPCResponse]:
+        """
+        Zpracuje jeden tah.
+
+        Args:
+            ai_call_fn: Funkce pro volání AI
+                        (npc_id, world_event, extra_instruction) -> NPCResponse
+            forced_event: Vynucená událost od uživatele
+
+        Returns:
+            NPCResponse nebo None (ticho)
+        """
+        if not self.is_active():
+            return None
+
+        # 1. Update stavů na začátku tahu
+        for state in self._npc_states.values():
+            state.on_turn_start(self.energy_regen_turn)
+
+        # 2. Generuj WorldEvent
+        last_was_question = "?" in self._last_response_text
+        question_target = None
+        if last_was_question and self._last_speaker_id:
+            question_target = detect_question_target(
+                self._last_response_text,
+                self._last_speaker_id,
+                list(self._npc_states.keys()),
+            )
+
+        world_event = self.event_generator.generate(
+            self._scene_context,
+            forced_event=forced_event,
+            last_response_was_question=last_was_question,
+            question_target_id=question_target,
+        )
+
+        _log("WORLD_EVENT", {
+            "type": world_event.event_type.value,
+            "description": world_event.description,
+            "intensity": world_event.intensity,
+            "pressure_target": world_event.pressure_target,
+        })
+
+        # 3. Získej penalizace za opakování
+        anti_rep_penalties = self.anti_rep.get_all_penalties(
+            list(self._npc_states.keys())
+        )
+
+        # 4. Skóruj NPC a vyber TOP K
+        top_scores = self.scorer.select_top_k(
+            self._npc_states,
+            world_event,
+            self._npc_data_map,
+            anti_rep_penalties,
+            k=self.top_k,
+        )
+
+        # Loguj všechny skóre
+        for npc_id, state in self._npc_states.items():
+            score_obj = next((s for s in top_scores if s.npc_id == npc_id), None)
+            _log("NPC_SCORE", {
+                "npc_id": npc_id,
+                "speak_drive": state.speak_drive,
+                "energy": state.energy,
+                "cooldown": state.cooldown_turns,
+                "score": score_obj.score if score_obj else 0,
+                "breakdown": score_obj.breakdown if score_obj else {},
+                "selected": score_obj is not None,
+            })
+
+        # 5. Kontrola jestli má někdo mluvit
+        if not self.scorer.should_anyone_speak(top_scores, self.min_score_to_speak):
+            # Nikdo nemá dostatečné skóre - ticho
+            self._scene_context.on_silence()
+            self._scene_context.on_turn_end()
+
+            # Kontrola ASSISTED módu
+            if self._scene_context.is_dying():
+                self._assisted_active = True
+                _log("ASSISTED_MODE_TRIGGERED", {
+                    "consecutive_silence": self._scene_context.consecutive_silence,
+                    "scene_energy": self._scene_context.scene_energy,
+                })
+
+            return None
+
+        # 6. Volej AI pro TOP K NPC
+        for score in top_scores:
+            npc_id = score.npc_id
+
+            # Extra instrukce
+            extra_instruction = ""
+            if self._assisted_active:
+                # Vyber náhodnou assisted možnost
+                option = random.choice(ASSISTED_OPTIONS)
+                extra_instruction = option.instruction
+                _log("ASSISTED_INSTRUCTION", {
+                    "npc_id": npc_id,
+                    "instruction": extra_instruction,
+                })
+
+            _log("AI_CALL", {
+                "npc_id": npc_id,
+                "score": score.score,
+            })
+
+            # Volej AI
+            response = ai_call_fn(npc_id, world_event, extra_instruction)
+
+            if response:
+                _log("AI_RESPONSE", {
+                    "npc_id": npc_id,
+                    "type": response.response_type.value,
+                    "text_preview": response.text[:50] if response.text else "",
+                })
+
+                # Zpracuj odpověď
+                return self._process_response(response, world_event)
+
+        # Žádná validní odpověď
+        self._scene_context.on_silence()
+        self._scene_context.on_turn_end()
+        return None
+
+    def _process_response(
+        self,
+        response: NPCResponse,
+        world_event: WorldEvent,
+    ) -> NPCResponse:
+        """Zpracuje odpověď od AI a aktualizuje stavy."""
+        npc_id = response.npc_id
+        state = self._npc_states.get(npc_id)
+
+        if response.is_speech():
+            # Aktualizuj stav NPC
+            if state:
+                state.on_spoke(
+                    self._scene_context.turn_number,
+                    self.energy_cost_speech,
+                )
+                state.cooldown_turns = self.cooldown_after_speech
+
+            # Aktualizuj kontext scény
+            self._scene_context.on_speech()
+            self._assisted_active = False  # Reset assisted modu
+
+            # Zaznamenej pro anti-repetition
+            self.anti_rep.record_speech(npc_id, response.text)
+
+            # Ulož pro další tah
+            self._last_speaker_id = npc_id
+            self._last_response_text = response.text
+
+        elif response.response_type == ResponseType.NOTHING:
+            self._scene_context.on_silence()
+
+        elif response.is_leaving():
+            # Goodbye - NPC chce odejít
+            if state:
+                state.stay_drive = 0.0
+
+        self._scene_context.on_turn_end()
+        return response
+
+    # === QUERIES ===
+
+    def get_npc_state(self, npc_id: str) -> Optional[NPCBehaviorState]:
+        """Vrátí stav NPC."""
+        return self._npc_states.get(npc_id)
+
+    def get_scene_context(self) -> Optional[SceneContext]:
+        """Vrátí kontext scény."""
+        return self._scene_context
+
+    def is_assisted_mode(self) -> bool:
+        """Je aktivní ASSISTED mód?"""
+        return self._assisted_active
+
+    def get_assisted_options(self) -> List[AssistedOption]:
+        """Vrátí možnosti pro ASSISTED mód."""
+        return ASSISTED_OPTIONS
+
+    def should_npc_leave(self, npc_id: str) -> bool:
+        """Má NPC odejít?"""
+        state = self._npc_states.get(npc_id)
+        if not state:
+            return False
+        return state.stay_drive <= 0.1
+
+    def get_debug_info(self) -> str:
+        """Vrátí debug info o stavu enginu."""
+        if not self.is_active():
+            return "Engine: neaktivní"
+
+        ctx = self._scene_context
+        states_info = []
+        for npc_id, state in self._npc_states.items():
+            states_info.append(
+                f"{npc_id}: drive={state.speak_drive:.2f}, "
+                f"energy={state.energy:.2f}, cd={state.cooldown_turns}"
+            )
+
+        return (
+            f"Turn: {ctx.turn_number}, "
+            f"Speeches: {ctx.total_speeches}, "
+            f"Energy: {ctx.scene_energy:.2f}, "
+            f"Silence: {ctx.consecutive_silence} | "
+            + " | ".join(states_info)
+        )
+
+
+def clear_intent_log() -> None:
+    """Vymaže DEV_INTENT_LOG."""
+    DEV_INTENT_LOG.clear()
+
+
+def print_intent_log() -> None:
+    """Vypíše DEV_INTENT_LOG do konzole."""
+    print("\n=== DEV_INTENT_LOG ===")
+    for entry in DEV_INTENT_LOG[-20:]:
+        print(entry)
+    print("======================\n")
+
+
+================================================================================
+SOUBOR: game/engine/world_event.py
+================================================================================
+
+"""
+WorldEvent Generator - generuje světové události.
+
+Director generuje jen WORLD EVENT (STIMULUS/PRESSURE/SILENCE), ne repliky.
+NPC pak sami rozhodují jak reagovat.
+"""
+
+import random
+import time
+from typing import Optional, List, Dict, Any
+
+from .types import WorldEvent, WorldEventType, SceneContext
+
+
+# Ambient události pro STIMULUS
+AMBIENT_EVENTS = [
+    "Kolem proletěl racek.",
+    "Od moře zafoukal vítr.",
+    "Někde v dálce zahoukal parník.",
+    "Na lavičku dopadl list.",
+    "Přeběhla kolem kočka.",
+    "V dálce se ozval smích.",
+    "Nad mořem zakroužil albatros.",
+    "Vlna se silněji rozbila o břeh.",
+    "Slunce na chvíli vykouklo z mraků.",
+    "Kolem prošel člověk se psem.",
+]
+
+# Události pro oživení umírající scény
+REVIVAL_EVENTS = [
+    "Silnější vlna vystříkla až na břeh.",
+    "Náhle se ozval výkřik rackého hejna.",
+    "Kolem profrčel cyklista a málem srazil koš.",
+    "Začalo drobně mrholit.",
+    "Na moři se objevila plachetnice.",
+]
+
+
+class WorldEventGenerator:
+    """Generátor světových událostí."""
+
+    def __init__(self):
+        self._last_ambient_time: float = 0
+        self._ambient_cooldown: float = 30.0  # Minimálně 30s mezi ambient událostmi
+
+    def generate(
+        self,
+        scene_context: SceneContext,
+        forced_event: Optional[str] = None,
+        last_response_was_question: bool = False,
+        question_target_id: Optional[str] = None,
+    ) -> WorldEvent:
+        """
+        Vygeneruje světovou událost pro aktuální tah.
+
+        Args:
+            scene_context: Kontext scény
+            forced_event: Vynucená událost od uživatele (klávesa E)
+            last_response_was_question: Zda poslední replika byla otázka
+            question_target_id: ID NPC na kterého směřuje otázka
+
+        Returns:
+            WorldEvent s typem a popisem
+        """
+        # 1. Vynucená událost od uživatele -> PRESSURE nebo STIMULUS
+        if forced_event:
+            return self._create_forced_event(forced_event)
+
+        # 2. Poslední replika byla otázka -> PRESSURE na druhého
+        if last_response_was_question and question_target_id:
+            return WorldEvent(
+                event_type=WorldEventType.PRESSURE,
+                description="Čeká se na odpověď na otázku.",
+                pressure_target=question_target_id,
+                intensity=0.7,
+            )
+
+        # 3. Scéna "umírá" -> zkus STIMULUS pro oživení
+        if scene_context.is_dying():
+            return self._create_revival_event()
+
+        # 4. Náhodná ambient událost (s cooldownem)
+        if self._should_generate_ambient():
+            return self._create_ambient_event()
+
+        # 5. Výchozí: SILENCE - prostor pro iniciativu
+        return WorldEvent(
+            event_type=WorldEventType.SILENCE,
+            description="Ticho. Prostor pro iniciativu.",
+            intensity=0.3,
+        )
+
+    def _create_forced_event(self, event_text: str) -> WorldEvent:
+        """Vytvoří událost z textu od uživatele."""
+        # Detekuj jestli je to otázka/oslovení (PRESSURE) nebo jen událost (STIMULUS)
+        pressure_keywords = ["?", "oslovil", "zeptal", "řekl", "křikl"]
+        is_pressure = any(kw in event_text.lower() for kw in pressure_keywords)
+
+        return WorldEvent(
+            event_type=WorldEventType.PRESSURE if is_pressure else WorldEventType.STIMULUS,
+            description=event_text,
+            intensity=0.8,
+        )
+
+    def _create_revival_event(self) -> WorldEvent:
+        """Vytvoří událost pro oživení umírající scény."""
+        event = random.choice(REVIVAL_EVENTS)
+        return WorldEvent(
+            event_type=WorldEventType.STIMULUS,
+            description=event,
+            intensity=0.6,
+        )
+
+    def _create_ambient_event(self) -> WorldEvent:
+        """Vytvoří náhodnou ambient událost."""
+        self._last_ambient_time = time.time()
+        event = random.choice(AMBIENT_EVENTS)
+        return WorldEvent(
+            event_type=WorldEventType.STIMULUS,
+            description=event,
+            intensity=0.4,
+        )
+
+    def _should_generate_ambient(self) -> bool:
+        """Má se generovat ambient událost?"""
+        # Cooldown check
+        if time.time() - self._last_ambient_time < self._ambient_cooldown:
+            return False
+        # 10% šance za tah
+        return random.random() < 0.10
+
+
+def detect_question_target(
+    last_response_text: str,
+    last_speaker_id: str,
+    all_npc_ids: List[str],
+) -> Optional[str]:
+    """
+    Detekuje na koho směřuje otázka v poslední replice.
+
+    Returns:
+        ID NPC na kterého směřuje otázka, nebo None
+    """
+    if "?" not in last_response_text:
+        return None
+
+    # Otázka směřuje na druhého NPC (ne na mluvícího)
+    for npc_id in all_npc_ids:
+        if npc_id != last_speaker_id:
+            return npc_id
+
+    return None
+
+
+================================================================================
+SOUBOR: game/engine/scorer.py
+================================================================================
+
+"""
+SpeakScorer - výběr TOP K NPC pro AI volání.
+
+Skóruje NPC podle jejich stavu a světové události,
+vybírá ty s nejvyšším skóre pro AI generování.
+"""
+
+from typing import List, Dict, Optional
+from dataclasses import dataclass
+
+from .types import WorldEvent, WorldEventType, NPCBehaviorState
+
+
+@dataclass
+class NPCScore:
+    """Skóre jednoho NPC."""
+    npc_id: str
+    score: float
+    breakdown: Dict[str, float]  # Rozpad skóre pro debug
+
+
+class SpeakScorer:
+    """Skóruje NPC a vybírá TOP K pro AI."""
+
+    def __init__(
+        self,
+        pressure_bonus: float = 0.4,
+        stimulus_bonus: float = 0.2,
+        cooldown_penalty: float = 0.3,
+        low_energy_penalty: float = 0.2,
+    ):
+        self.pressure_bonus = pressure_bonus
+        self.stimulus_bonus = stimulus_bonus
+        self.cooldown_penalty = cooldown_penalty
+        self.low_energy_penalty = low_energy_penalty
+
+    def score_npc(
+        self,
+        state: NPCBehaviorState,
+        world_event: WorldEvent,
+        npc_data: Dict,
+        anti_rep_penalty: float = 0.0,
+    ) -> NPCScore:
+        """
+        Vypočítá skóre pro jedno NPC.
+
+        Args:
+            state: Stav chování NPC
+            world_event: Aktuální světová událost
+            npc_data: Data NPC z postavy.json (pro povahu)
+            anti_rep_penalty: Penalizace za opakování (0-1)
+
+        Returns:
+            NPCScore s celkovým skóre a rozpadem
+        """
+        breakdown = {}
+
+        # Základní skóre = speak_drive * energy
+        base = state.speak_drive * state.energy
+        breakdown["base"] = base
+
+        # Bonus za PRESSURE na toto NPC
+        pressure = 0.0
+        if world_event.event_type == WorldEventType.PRESSURE:
+            if world_event.pressure_target == state.npc_id:
+                pressure = self.pressure_bonus * world_event.intensity
+        breakdown["pressure"] = pressure
+
+        # Bonus za STIMULUS (všichni mohou reagovat)
+        stimulus = 0.0
+        if world_event.event_type == WorldEventType.STIMULUS:
+            stimulus = self.stimulus_bonus * world_event.intensity
+            # Bonus podle mluvnosti
+            mluvnost = npc_data.get("povaha", {}).get("mluvnost", 0.5)
+            stimulus *= mluvnost
+        breakdown["stimulus"] = stimulus
+
+        # Penalizace za cooldown
+        cooldown = 0.0
+        if state.cooldown_turns > 0:
+            cooldown = -self.cooldown_penalty * state.cooldown_turns
+        breakdown["cooldown"] = cooldown
+
+        # Penalizace za nízkou energii
+        energy_pen = 0.0
+        if state.energy < 0.3:
+            energy_pen = -self.low_energy_penalty * (0.3 - state.energy)
+        breakdown["energy_penalty"] = energy_pen
+
+        # Penalizace za opakování
+        anti_rep = -anti_rep_penalty * 0.3
+        breakdown["anti_rep"] = anti_rep
+
+        # Celkové skóre
+        total = max(0.0, base + pressure + stimulus + cooldown + energy_pen + anti_rep)
+        breakdown["total"] = total
+
+        return NPCScore(
+            npc_id=state.npc_id,
+            score=total,
+            breakdown=breakdown,
+        )
+
+    def select_top_k(
+        self,
+        states: Dict[str, NPCBehaviorState],
+        world_event: WorldEvent,
+        npc_data_map: Dict[str, Dict],
+        anti_rep_penalties: Dict[str, float],
+        k: int = 1,
+    ) -> List[NPCScore]:
+        """
+        Vybere TOP K NPC s nejvyšším skóre.
+
+        Args:
+            states: Slovník stavů NPC (id -> state)
+            world_event: Aktuální světová událost
+            npc_data_map: Slovník dat NPC (id -> data z postavy.json)
+            anti_rep_penalties: Penalizace za opakování pro každé NPC
+            k: Kolik NPC vybrat
+
+        Returns:
+            Seznam TOP K NPCScore, seřazený od nejvyššího
+        """
+        scores = []
+        for npc_id, state in states.items():
+            if not state.can_speak():
+                # NPC nemůže mluvit - přeskoč
+                continue
+
+            npc_data = npc_data_map.get(npc_id, {})
+            anti_rep = anti_rep_penalties.get(npc_id, 0.0)
+
+            score = self.score_npc(state, world_event, npc_data, anti_rep)
+            scores.append(score)
+
+        # Seřaď podle skóre sestupně
+        scores.sort(key=lambda s: s.score, reverse=True)
+
+        # Vrať TOP K
+        return scores[:k]
+
+    def should_anyone_speak(
+        self,
+        top_scores: List[NPCScore],
+        min_score_threshold: float = 0.15,
+    ) -> bool:
+        """
+        Rozhodne jestli má někdo mluvit na základě skóre.
+
+        Args:
+            top_scores: TOP K skóre z select_top_k
+            min_score_threshold: Minimální skóre pro mluvení
+
+        Returns:
+            True pokud má alespoň jeden NPC dostatečné skóre
+        """
+        if not top_scores:
+            return False
+        return top_scores[0].score >= min_score_threshold
+
+
+================================================================================
+SOUBOR: game/engine/anti_repetition.py
+================================================================================
+
+"""
+Anti-repetition Tracker - sleduje opakování frází a témat.
+
+Penalizuje NPC které se opakují, aby rozhovory byly pestřejší.
+"""
+
+from typing import List, Dict, Set
+from dataclasses import dataclass, field
+from collections import deque
+import re
+
+
+@dataclass
+class AntiRepetitionTracker:
+    """Sleduje opakování frází a témat."""
+
+    max_phrases: int = 10      # Kolik posledních frází sledovat
+    max_topics: int = 5        # Kolik posledních témat sledovat
+    phrase_threshold: float = 0.5  # Podobnost frází pro penalizaci
+
+    # Interní stav per NPC
+    _recent_phrases: Dict[str, deque] = field(default_factory=dict)
+    _recent_topics: Dict[str, deque] = field(default_factory=dict)
+
+    def _ensure_npc(self, npc_id: str) -> None:
+        """Zajistí že NPC má inicializované fronty."""
+        if npc_id not in self._recent_phrases:
+            self._recent_phrases[npc_id] = deque(maxlen=self.max_phrases)
+        if npc_id not in self._recent_topics:
+            self._recent_topics[npc_id] = deque(maxlen=self.max_topics)
+
+    def record_speech(self, npc_id: str, text: str, topics: List[str] = None) -> None:
+        """
+        Zaznamená repliku NPC.
+
+        Args:
+            npc_id: ID NPC
+            text: Text repliky
+            topics: Seznam témat v replice (volitelné)
+        """
+        self._ensure_npc(npc_id)
+
+        # Extrahuj klíčové fráze z textu
+        phrases = self._extract_phrases(text)
+        for phrase in phrases:
+            self._recent_phrases[npc_id].append(phrase.lower())
+
+        # Zaznamenej témata
+        if topics:
+            for topic in topics:
+                self._recent_topics[npc_id].append(topic.lower())
+
+    def get_penalty(self, npc_id: str, proposed_text: str) -> float:
+        """
+        Vypočítá penalizaci za opakování.
+
+        Args:
+            npc_id: ID NPC
+            proposed_text: Navrhovaný text repliky
+
+        Returns:
+            Penalizace 0.0-1.0 (0 = žádné opakování, 1 = silné opakování)
+        """
+        self._ensure_npc(npc_id)
+
+        if not proposed_text:
+            return 0.0
+
+        proposed_phrases = self._extract_phrases(proposed_text)
+        recent = list(self._recent_phrases[npc_id])
+
+        if not recent or not proposed_phrases:
+            return 0.0
+
+        # Počítej kolik frází se opakuje
+        matches = 0
+        for phrase in proposed_phrases:
+            phrase_lower = phrase.lower()
+            for old_phrase in recent:
+                if self._phrases_similar(phrase_lower, old_phrase):
+                    matches += 1
+                    break
+
+        # Penalizace podle počtu shod
+        if not proposed_phrases:
+            return 0.0
+
+        ratio = matches / len(proposed_phrases)
+        return min(1.0, ratio * 1.5)  # Zesílení penalizace
+
+    def get_all_penalties(self, npc_ids: List[str]) -> Dict[str, float]:
+        """
+        Vrátí aktuální penalizace pro všechna NPC (bez navrhovaného textu).
+
+        Pro použití před AI voláním - penalizace založená na minulém opakování.
+        """
+        penalties = {}
+        for npc_id in npc_ids:
+            self._ensure_npc(npc_id)
+            recent = list(self._recent_phrases[npc_id])
+
+            if len(recent) < 3:
+                penalties[npc_id] = 0.0
+                continue
+
+            # Penalizace podle toho jak moc se NPC opakuje sám
+            unique = len(set(recent))
+            repetition_ratio = 1.0 - (unique / len(recent))
+            penalties[npc_id] = repetition_ratio * 0.5
+
+        return penalties
+
+    def clear(self, npc_id: str = None) -> None:
+        """Vymaže historii pro NPC nebo všechny."""
+        if npc_id:
+            self._recent_phrases.pop(npc_id, None)
+            self._recent_topics.pop(npc_id, None)
+        else:
+            self._recent_phrases.clear()
+            self._recent_topics.clear()
+
+    def _extract_phrases(self, text: str) -> List[str]:
+        """Extrahuje klíčové fráze z textu."""
+        # Odstraň interpunkci a rozděl na slova
+        text = re.sub(r'[^\w\s]', ' ', text)
+        words = text.lower().split()
+
+        # Filtruj krátká slova a stopwords
+        stopwords = {'a', 'i', 'o', 'u', 'v', 'k', 's', 'z', 'na', 'do', 'to',
+                     'je', 'se', 'že', 'by', 'si', 'ale', 'tak', 'jak', 'co',
+                     'ten', 'ta', 'ty', 'já', 'on', 'ona', 'vy', 'my', 'oni'}
+        words = [w for w in words if len(w) > 2 and w not in stopwords]
+
+        # Vrať unikátní slova jako "fráze"
+        return list(set(words))
+
+    def _phrases_similar(self, phrase1: str, phrase2: str) -> bool:
+        """Zjistí jestli jsou dvě fráze podobné."""
+        # Přesná shoda
+        if phrase1 == phrase2:
+            return True
+
+        # Začátek shody (pro skloňování)
+        min_len = min(len(phrase1), len(phrase2))
+        if min_len >= 4:
+            if phrase1[:4] == phrase2[:4]:
+                return True
+
+        return False
+
+
+================================================================================
+SOUBOR: game/settings.py (RELEVANTNÍ ČÁST - BEHAVIOR ENGINE)
+================================================================================
+
+# === BEHAVIOR ENGINE ===
+# Feature flag pro nový engine (True = nový, False = starý Director)
+USE_BEHAVIOR_ENGINE = True
+
+# Kolik NPC může jít do AI za jeden tah (default 1)
+BEHAVIOR_ENGINE_TOP_K = 1
+
+# Cooldown po promluvení (počet tahů)
+BEHAVIOR_COOLDOWN_SPEECH = 1
+
+# Energie - kolik se spotřebuje za mluvení
+BEHAVIOR_ENERGY_COST_SPEECH = 0.15
+
+# Energie - regenerace za tah
+BEHAVIOR_ENERGY_REGEN_TURN = 0.05
+
+# Minimální skóre pro mluvení
+BEHAVIOR_MIN_SCORE_TO_SPEAK = 0.15
+
+# DEV_INTENT_LOG - detailní logování enginu
+DEV_INTENT_LOG_ENABLED = True
+
+
+================================================================================
+SOUBOR: game/ai/client.py (RELEVANTNÍ ČÁST - get_engine_response)
+================================================================================
+
+# Validní typy odpovědí (rozšířeno o action a nothing pro BehaviorEngine)
+VALID_RESPONSE_TYPES = {"speech", "thought", "goodbye", "action", "nothing"}
+
+
+def get_engine_response(
+    self,
+    npc: dict,
+    soused: Optional[dict],
+    historie: list,
+    relationship_rules: dict,
+    memory_context: str,
+    world_event_desc: str,
+    extra_instruction: str = "",
+) -> Optional[dict]:
+    """
+    Získá odpověď od AI pro BehaviorEngine.
+
+    Na rozdíl od get_response používá WorldEvent místo forced_event
+    a podporuje nové typy odpovědí (action, nothing).
+
+    Args:
+        npc: NPC které má odpovědět
+        soused: Druhé NPC (nebo None)
+        historie: Historie rozhovoru
+        relationship_rules: Pravidla vztahu
+        memory_context: Kontext z paměti
+        world_event_desc: Popis světové události
+        extra_instruction: Extra instrukce (např. z ASSISTED módu)
+
+    Returns:
+        {"type": "speech"|"thought"|"action"|"nothing"|"goodbye", "text": "..."} nebo None
+    """
+    # Najdi poslední repliku souseda
+    posledni_replika = None
+    if soused:
+        for h in reversed(historie[-50:]):
+            if h.get("type") == "speech" and h.get("role") == soused["role"]:
+                posledni_replika = (h.get("text", "") or "").strip()
+                break
+
+    # Sestav roleplay log
+    roleplay_log = self._prompt_builder.build_roleplay_log(
+        npc, soused, historie, limit=8
+    )
+
+    # Sestav prompt pro engine
+    system_prompt, user_prompt = self._prompt_builder.build_engine_prompt(
+        npc=npc,
+        soused=soused,
+        roleplay_log=roleplay_log,
+        posledni_replika=posledni_replika,
+        relationship_rules=relationship_rules,
+        memory_context=memory_context,
+        world_event_desc=world_event_desc,
+        extra_instruction=extra_instruction,
+    )
+
+    # Loguj request
+    self._logger.log_request(npc['role'], "engine", system_prompt, user_prompt)
+
+    # Volej AI
+    try:
+        response = self._client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=AI_TEMPERATURE,
+            max_tokens=AI_MAX_TOKENS,
+        )
+
+        raw = response.choices[0].message.content
+
+        # Parsuj odpověď
+        data = parse_response(raw)
+        if not data:
+            return None
+
+        text = (data.get("text", "") or "").strip()
+        typ = (data.get("type", "speech") or "speech").strip().lower()
+
+        # Validace typu
+        if typ not in VALID_RESPONSE_TYPES:
+            typ = "speech"  # Fallback
+
+        # Pro nothing a action může být text kratší nebo prázdný
+        if typ in ("nothing",):
+            if not text:
+                text = ""
+        elif typ == "action":
+            if not text:
+                return None
+        else:
+            # Pro speech/thought validace délky
+            if not text or len(text) > 220:
+                return None
+
+        # Detekce rozloučení
+        if typ == "speech" and self._looks_like_goodbye(text):
+            typ = "goodbye"
+
+        return {"type": typ, "text": text}
+
+    except Exception as e:
+        return None
+
+
+================================================================================
+SOUBOR: game/ai/prompts.py (RELEVANTNÍ ČÁST - build_engine_prompt)
+================================================================================
+
+def build_engine_prompt(
+    self,
+    npc: dict,
+    soused: Optional[dict],
+    roleplay_log: str,
+    posledni_replika: Optional[str],
+    relationship_rules: dict,
+    memory_context: str,
+    world_event_desc: str,
+    extra_instruction: str = "",
+) -> tuple:
+    """
+    Sestaví prompt pro BehaviorEngine.
+
+    Obsahuje WorldEvent místo forced_event a podporuje
+    nové typy odpovědí (action, nothing).
+
+    Args:
+        npc: Aktivní NPC
+        soused: Druhé NPC (nebo None)
+        roleplay_log: Posledních pár replik
+        posledni_replika: Poslední replika souseda
+        relationship_rules: Pravidla vztahu
+        memory_context: Kontext z paměti
+        world_event_desc: Popis světové události
+        extra_instruction: Extra instrukce (např. z ASSISTED módu)
+
+    Returns:
+        Tuple (system_prompt, user_prompt)
+    """
+    # Základní kontext
+    common = self._build_common(
+        npc=npc,
+        relationship_rules=relationship_rules,
+        memory_context=memory_context,
+        event_context="",
+        forced_event=None,
+    )
+
+    if not soused:
+        # NPC je samo
+        system_prompt = common + """
+Jsi na lavičce sám/sama. Napiš jednu krátkou vnitřní myšlenku.
+Vrať: {"type":"thought","text":"..."}"""
+        return (system_prompt, "Teď:")
+
+    # NPC má souseda
+    popis = soused.get("popis", "někdo")
+
+    # World event blok
+    world_event_block = ""
+    if world_event_desc:
+        world_event_block = f"""
+=== CO SE PRÁVĚ DĚJE ===
+{world_event_desc}
+Můžeš reagovat na tuto situaci, nebo ji ignorovat.
+"""
+
+    # Extra instrukce (z ASSISTED módu)
+    extra_block = ""
+    if extra_instruction:
+        extra_block = f"""
+=== NÁPOVĚDA ===
+{extra_instruction}
+"""
+
+    system_prompt = common + f"""
+Mluvíš s člověkem ({popis}).
+
+ROZHOVOR:
+{roleplay_log if roleplay_log else "(začátek)"}
+
+Právě řekl/a: "{posledni_replika if posledni_replika else "..."}"
+{world_event_block}
+{extra_block}
+Odpověz přirozeně. SAM/SAMA SE ROZHODNI co uděláš.
+Vrať JSON: {{"type":"TYP","text":"..."}}
+TYP může být:
+- "speech" = řekneš nahlas (normální replika)
+- "thought" = myšlenka v hlavě (zobrazí se v závorce)
+- "action" = fyzická akce bez slov (např. "Podívá se na moře.", "Přikývne.")
+- "nothing" = ticho, neříkáš nic, jen sedíš"""
+
+    return (system_prompt, "Teď:")
+
+
+================================================================================
+SOUBOR: game/app.py (RELEVANTNÍ ČÁST - ENGINE INTEGRACE)
+================================================================================
+
+from .engine import BehaviorEngine, NPCResponse, ResponseType, WorldEvent, DEV_INTENT_LOG
+
+class LavickaApp:
+    def __init__(self):
+        # ... ostatní inicializace ...
+
+        # BehaviorEngine (nový systém)
+        self.behavior_engine = BehaviorEngine(
+            top_k=BEHAVIOR_ENGINE_TOP_K,
+            cooldown_after_speech=BEHAVIOR_COOLDOWN_SPEECH,
+            energy_cost_speech=BEHAVIOR_ENERGY_COST_SPEECH,
+            energy_regen_turn=BEHAVIOR_ENERGY_REGEN_TURN,
+            min_score_to_speak=BEHAVIOR_MIN_SCORE_TO_SPEAK,
+        )
+
+    def tah(self):
+        """Provede jeden herní tah."""
+        # ... lock a prichody/odchody ...
+
+        obsazeno = [i for i, x in enumerate(self.sedadla) if x]
+        if not obsazeno:
+            return
+
+        forced_event = self.events.get_pending_event()
+
+        # Použij BehaviorEngine pro dva NPC
+        if USE_BEHAVIOR_ENGINE and len(obsazeno) == 2 and self.behavior_engine.is_active():
+            self._tah_engine(forced_event)
+            if forced_event:
+                self.events.clear_pending()
+            return
+
+        # Fallback: původní logika
+        self._tah_legacy(obsazeno, forced_event)
+
+    def _tah_engine(self, forced_event: Optional[str]):
+        """Provede tah pomocí BehaviorEngine."""
+
+        def ai_call_fn(npc_id: str, world_event: WorldEvent, extra_instruction: str) -> Optional[NPCResponse]:
+            """Callback pro volání AI z enginu."""
+            # Najdi NPC podle ID
+            npc = None
+            soused = None
+            for i, s in enumerate(self.sedadla):
+                if s and s.get('id') == npc_id:
+                    npc = s
+                elif s:
+                    soused = s
+
+            if not npc:
+                return None
+
+            # Příprava kontextu vztahu a paměti
+            relationship_rules = {}
+            memory_context = ""
+
+            if soused:
+                vztah = self.relationships.get(npc, soused)
+                relationship_rules = {
+                    "pacing": self.relationships.get_pacing_rule(npc, soused),
+                    "addressing": self.relationships.get_addressing_rule(npc, soused),
+                    "topics": self.relationships.get_topic_suggestions(npc, soused),
+                    "familiarity": vztah.familiarity,
+                    "sympathy": vztah.sympathy,
+                    "tykani": vztah.tykani,
+                }
+                memory_context = vytvor_kontext_z_pameti(
+                    self.pamet, npc['id'], soused['id'], vztah.familiarity
+                )
+
+            # Volej AI s engine promptem
+            resp = self.ai_client.get_engine_response(
+                npc=npc,
+                soused=soused,
+                historie=self.historie,
+                relationship_rules=relationship_rules,
+                memory_context=memory_context,
+                world_event_desc=world_event.description,
+                extra_instruction=extra_instruction,
+            )
+
+            if not resp:
+                return None
+
+            # Konvertuj na NPCResponse
+            typ_str = resp.get('type', 'speech')
+            try:
+                response_type = ResponseType(typ_str)
+            except ValueError:
+                response_type = ResponseType.SPEECH
+
+            return NPCResponse(
+                npc_id=npc_id,
+                response_type=response_type,
+                text=resp.get('text', ''),
+            )
+
+        # Zavolej engine
+        response = self.behavior_engine.process_turn(
+            ai_call_fn=ai_call_fn,
+            forced_event=forced_event,
+        )
+
+        if not response:
+            return  # Ticho
+
+        # Zpracuj odpověď
+        self._zpracuj_engine_odpoved(response)
+
+    def _zpracuj_engine_odpoved(self, response: NPCResponse):
+        """Zpracuje odpověď od BehaviorEngine."""
+        # Najdi NPC
+        npc = None
+        soused = None
+        idx = -1
+        for i, s in enumerate(self.sedadla):
+            if s and s.get('id') == response.npc_id:
+                npc = s
+                idx = i
+            elif s:
+                soused = s
+
+        if not npc or idx < 0:
+            return
+
+        text = response.text
+        typ = response.response_type
+
+        # Zpracuj podle typu
+        if typ == ResponseType.NOTHING:
+            return  # Ticho
+
+        if typ == ResponseType.GOODBYE:
+            npc['chce_odejit'] = True
+            typ = ResponseType.SPEECH
+
+        if typ == ResponseType.ACTION:
+            # Akce jako systémová zpráva
+            self._add_to_history(npc['role'], f"*{text}*", 'action')
+            trvani = max(2.0, len(text) / 15.0)
+            self.aktualni_bublina = {
+                'text': f"*{text}*",
+                'is_thought': True,
+                'idx': idx,
+                'konec': time.time() + trvani,
+            }
+            return
+
+        if not text:
+            return
+
+        # Speech nebo Thought
+        msg_type = 'thought' if typ == ResponseType.THOUGHT else 'speech'
+        self._add_to_history(npc['role'], text, msg_type)
+
+        # Aktualizovat vztah
+        if soused and typ == ResponseType.SPEECH:
+            self.relationships.update_after_speech(npc, soused, text)
+            # ... update paměti ...
+
+        # Zobrazit bublinu
+        trvani = max(BUBLINA_MIN_TRVANI, len(text) / BUBLINA_RYCHLOST)
+        self.aktualni_bublina = {
+            'text': text,
+            'is_thought': typ == ResponseType.THOUGHT,
+            'idx': idx,
+            'konec': time.time() + trvani,
+        }
+
+    def _pridej_npc(self, seat_index: int):
+        """Přidá nové NPC na sedadlo."""
+        # ... vytvoření NPC ...
+
+        # Spustit scénu pokud jsou dva NPC
+        soused = self.sedadla[1 - seat_index]
+        if soused:
+            # ... Director start ...
+
+            # Spustit BehaviorEngine scénu
+            if USE_BEHAVIOR_ENGINE:
+                self.behavior_engine.start_scene(npc, soused)
+
+    def _odejdi_npc(self, seat_index: int):
+        """Odebere NPC ze sedadla."""
+        # ... uložení paměti ...
+
+        # Ukončit BehaviorEngine scénu
+        if USE_BEHAVIOR_ENGINE and self.behavior_engine.is_active():
+            self.behavior_engine.end_scene()
+
+    def _zpracuj_odchody(self):
+        """Zpracuje odchody NPC."""
+        for i in range(2):
+            npc = self.sedadla[i]
+            if not npc:
+                continue
+
+            # Kontrola odchodu od BehaviorEngine
+            if USE_BEHAVIOR_ENGINE and self.behavior_engine.is_active():
+                if self.behavior_engine.should_npc_leave(npc.get('id', '')):
+                    npc['chce_odejit'] = True
+
+            # ... zbytek odchodové logiky ...
+
+
+================================================================================
+KONEC SOUBORU
+================================================================================

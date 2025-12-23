@@ -5,9 +5,10 @@
 **Lavička nad mořem** je AI-driven simulace, kde NPC postavy sedí na lavičce u moře a vedou rozhovory. Každá postava má vlastní osobnost, paměť a vztahy s ostatními.
 
 ### Klíčové vlastnosti
+- **Behavior Engine** - NPC rozhodují sami na základě vnitřních stavů
 - **Persistentní paměť** - NPC si pamatují předchozí rozhovory
 - **Dynamické vztahy** - vztahy se vyvíjejí na základě kvality interakcí
-- **Director systém** - řídí tok a dramaturgii scén
+- **Director systém** - fallback pro jednoho NPC
 - **Plně dynamické NPC** - žádný hardcoded kód pro konkrétní postavy
 - **Lokální LLM** - běží na LM Studio (Qwen 2.5 nebo jiný model)
 
@@ -29,8 +30,14 @@
 └──────────────┬──────────────────────┘
                │
 ┌──────────────▼──────────────────────┐
+│    BEHAVIOR ENGINE (engine/)        │
+│  WorldEvent, Scorer, AntiRep        │
+│  (pro 2 NPC - hlavní systém)        │
+└──────────────┬──────────────────────┘
+               │
+┌──────────────▼──────────────────────┐
 │      GAME LOGIC (rules/)            │
-│  Director, Relationships, Events    │
+│  Director (fallback), Relationships │
 └──────────────┬──────────────────────┘
                │
 ┌──────────────▼──────────────────────┐
@@ -44,7 +51,7 @@
 └─────────────────────────────────────┘
 ```
 
-### Tok jednoho tahu
+### Tok jednoho tahu (Behavior Engine)
 
 ```
 main.py (event loop)
@@ -54,6 +61,35 @@ app.tah() [v threadu]
     │
     ├─► _zpracuj_prichody()  → náhodný příchod NPC
     ├─► _zpracuj_odchody()   → kontrola odchodů
+    │
+    ▼ (pokud 2 NPC a USE_BEHAVIOR_ENGINE=True)
+_tah_engine()
+    │
+    ├─► WorldEventGenerator.generate() → STIMULUS/PRESSURE/SILENCE
+    ├─► SpeakScorer.select_top_k() → výběr NPC pro AI
+    ├─► AntiRepetitionTracker.get_penalties()
+    │
+    ▼ (pro TOP K NPC)
+ai_call_fn() callback
+    │
+    ├─► PromptBuilder.build_engine_prompt()
+    ├─► AIClient.get_engine_response() → volání LLM
+    └─► Parser.parse() → extrakce odpovědi
+    │
+    ▼
+_zpracuj_engine_odpoved()
+    │
+    ├─► _add_to_history()    → přidání do chatu
+    ├─► relationships.update_after_speech()
+    ├─► pamet.aktualizuj_vztah()
+    └─► zobrazení bubliny
+```
+
+### Tok jednoho tahu (Legacy/Fallback)
+
+```
+_tah_legacy() [pro 1 NPC nebo engine vypnutý]
+    │
     ├─► director.suggest_event() → automatické události
     ├─► _should_speak()      → rozhodnutí o tichu
     ├─► _vyber_mluvciho()    → kdo bude mluvit
@@ -67,11 +103,6 @@ _get_ai_response()
     │
     ▼
 _zpracuj_odpoved()
-    │
-    ├─► _add_to_history()    → přidání do chatu
-    ├─► relationships.update_after_speech()
-    ├─► pamet.aktualizuj_vztah()
-    └─► zobrazení bubliny
 ```
 
 ---
@@ -88,11 +119,18 @@ lavicka/
 │   ├── main.py               # Pygame smyčka + klávesové zkratky
 │   ├── settings.py           # Konfigurace a konstanty
 │   │
+│   ├── engine/               # Behavior Engine (nový systém)
+│   │   ├── types.py          # WorldEvent, NPCBehaviorState, ResponseType
+│   │   ├── world_event.py    # Generátor světových událostí
+│   │   ├── scorer.py         # Skórování NPC pro výběr mluvčího
+│   │   ├── anti_repetition.py # Sledování opakování frází
+│   │   └── behavior_engine.py # Hlavní orchestrátor + DEV_INTENT_LOG
+│   │
 │   ├── npc/                  # Modul postav
 │   │   ├── base.py           # Třída NPC
 │   │   └── archetypes.py     # Načítání postav z JSON
 │   │
-│   ├── rules/                # Herní logika
+│   ├── rules/                # Herní logika (fallback)
 │   │   ├── director.py       # Režisér scény
 │   │   ├── relationships.py  # Správce vztahů
 │   │   └── events.py         # Události prostředí
@@ -206,7 +244,212 @@ Příklad: Babička (`["vzpomínky", "rodina"]`) + Dělník (`["fotbal", "pivo"]
 
 ---
 
-### 3. Director (rules/director.py)
+### 3. Behavior Engine (engine/)
+
+Nový systém řízení NPC chování pro dva NPC na lavičce.
+
+#### Princip
+
+1. **Director neřídí repliky** - jen generuje WorldEvent
+2. **NPC rozhodují sami** na základě vnitřních stavů
+3. **TOP K=1** NPC jde do AI za tah
+4. **Dynamické drives** - speak_drive a stay_drive se mění každý tah
+5. **Post-check anti-repetition** - opakující se repliky jsou downgradovány nebo odmítnuty
+6. **Aktivita ≠ ticho** - action/thought nepočítá jako "mrtvá scéna"
+
+#### Struktura souborů
+
+```
+engine/
+├── types.py              # Datové typy (WorldEvent, NPCBehaviorState, SceneContext...)
+├── behavior_engine.py    # Hlavní orchestrátor + DEV_INTENT_LOG
+├── world_event.py        # Generátor světových událostí
+├── scorer.py             # Skórování NPC pro výběr mluvčího
+├── anti_repetition.py    # Sledování opakování + rejection logic
+└── drive_update.py       # Dynamická aktualizace speak_drive a stay_drive
+```
+
+#### Datové typy (types.py)
+
+```python
+class WorldEventType(Enum):
+    STIMULUS = "stimulus"    # Něco se stalo (racek, vítr)
+    PRESSURE = "pressure"    # Tlak na reakci (otázka)
+    SILENCE = "silence"      # Ticho - prostor pro iniciativu
+
+@dataclass
+class NPCBehaviorState:
+    npc_id: str
+    speak_drive: float = 0.3      # Jak moc chce mluvit (0-1) - DYNAMICKY SE MĚNÍ
+    stay_drive: float = 0.7       # Jak moc chce zůstat (0-1) - DYNAMICKY SE MĚNÍ
+    cooldown_turns: int = 0       # Kolik tahů musí čekat
+    energy: float = 1.0           # Energie (0-1)
+
+class ResponseType(Enum):
+    SPEECH = "speech"       # Mluvená replika
+    THOUGHT = "thought"     # Vnitřní myšlenka
+    ACTION = "action"       # Fyzická akce bez slov
+    NOTHING = "nothing"     # Ticho
+    GOODBYE = "goodbye"     # Loučení a odchod (pouze interní, ne v promptu)
+
+@dataclass
+class SceneContext:
+    turn_number: int = 0
+    scene_energy: float = 0.5
+    consecutive_silence: int = 0      # Počet tahů bez řeči
+    consecutive_inactivity: int = 0   # Počet tahů bez jakékoli aktivity
+    # on_speech() / on_action() / on_thought() / on_nothing()
+```
+
+#### DriveUpdater (drive_update.py)
+
+Dynamická aktualizace speak_drive a stay_drive každý tah:
+
+**speak_drive se mění podle:**
+- PRESSURE na NPC → +0.25 boost
+- Přímé oslovení jménem → +0.15 boost (včetně vokativů!)
+- SILENCE → růst jen u mluvných (mluvnost > 0.3)
+- Nízká energie → penalizace
+- Cooldown → penalizace
+- Anti-rep penalty → snížení chuti mluvit
+
+**stay_drive se mění podle:**
+- Mrtvá scéna (is_dying) → klesá
+- Dlouhé ticho (3+ tahů) → klesá
+- Nízká energie NPC → klesá
+- Vysoká repetice → klesá (nuda)
+- Živá scéna (energy > 0.6) → boost
+
+**Detekce oslovení (detect_addressing):**
+```python
+# Podporuje české vokativy:
+# Vlasta -> Vlasto, Babička -> Babičko, Karel -> Karle
+detect_addressing("Hele Vlasto, co říkáte?", "Vlasta", "Babička") -> True
+```
+
+```python
+class DriveUpdater:
+    def update_drives(state, npc_data, world_event, scene_context, anti_rep_penalty, was_addressed):
+        # Aktualizuje speak_drive a stay_drive
+
+    def on_after_speech(state, was_successful):
+        # Drop speak_drive po mluvení
+```
+
+#### WorldEvent Generator (world_event.py)
+
+Generuje světové události s **kombinovaným turn + time cooldownem**:
+
+```python
+def __init__(
+    ambient_time_cooldown: float = 20.0,   # Minimálně 20s mezi ambient
+    ambient_turn_cooldown: int = 3,        # Minimálně 3 tahy mezi ambient
+    ambient_chance: float = 0.15,          # 15% šance po splnění cooldownů
+):
+
+def generate(scene_context, forced_event, last_response_was_question, question_target_id):
+    # 1. Vynucená událost od uživatele -> PRESSURE/STIMULUS
+    # 2. Poslední replika byla otázka -> PRESSURE na druhého
+    # 3. Scéna "umírá" -> STIMULUS pro oživení
+    # 4. Náhodná ambient událost (turn + time cooldown)
+    # 5. Výchozí: SILENCE
+```
+
+#### Scorer (scorer.py)
+
+Skóruje NPC a vybírá TOP K pro AI:
+
+```python
+score = speak_drive * energy
+      + bonus za PRESSURE target (0.4 * intensity)
+      + bonus za STIMULUS * mluvnost (0.2 * intensity * mluvnost)
+      - penalizace za cooldown (0.3 * cooldown_turns)
+      - penalizace za nízkou energii
+      - penalizace za opakování (0.3 * anti_rep)
+```
+
+#### Anti-Repetition (anti_repetition.py)
+
+Sleduje tři typy opakování:
+1. **Fráze/slova** - opakující se klíčová slova v replikách
+2. **Začátky replik** - detekce patternů jako "Ano, ...", "No, ...", "Jasně, ..."
+3. **Témata** - volitelné sledování témat (zatím neimplementováno)
+
+**Sledování začátků replik (NOVÉ):**
+```python
+# Extrahuje první slovo z repliky
+_extract_start("Ano, máte pravdu.") -> "ano"
+
+# Penalizace podle počtu opakování:
+# 1x stejný začátek = 0.2 (mírná)
+# 2x stejný začátek = 0.5 (střední -> downgrade_to_thought)
+# 3x+ stejný začátek = 0.8 (vysoká -> reject)
+```
+
+**Pre-check:** Penalizace ve scoringu podle minulého opakování.
+
+**Post-check:** Po AI odpovědi kontrola a případný downgrade:
+
+```python
+def get_rejection_action(npc_id, proposed_text) -> str:
+    penalty = get_penalty(npc_id, proposed_text)
+    if penalty < 0.4:   return "accept"
+    elif penalty < 0.6: return "downgrade_to_thought"
+    elif penalty < 0.8: return "downgrade_to_action"
+    else:               return "reject"  # Změna na NOTHING
+```
+
+Při downgrade na action se použije generická akce:
+```python
+generic_actions = [
+    "Podívá se na moře.",
+    "Zamyšleně přikývne.",
+    "Pozoruje okolí.",
+    "Pousměje se.",
+]
+```
+
+#### SceneContext - aktivita vs ticho
+
+```python
+on_speech()   # Velká aktivita - reset silence i inactivity, energy +0.1
+on_action()   # Střední aktivita - reset inactivity, energy +0.03
+on_thought()  # Malá aktivita - reset inactivity, energy +0.01
+on_nothing()  # Žádná aktivita - silence++, inactivity++, energy -0.07
+
+def is_dying() -> bool:
+    # Scéna umírá při inaktivitě, ne při pouhém tichu!
+    return consecutive_inactivity >= 2 and scene_energy < 0.15
+```
+
+#### ASSISTED mód
+
+Když scéna "umírá", engine nabídne **měkké impulsy** (ne příkazy):
+- "Napadá tě něco... Ale klidně můžeš i mlčet."
+- "Možná by ses mohl/a na něco zeptat - ale jen pokud tě to zajímá."
+- "Přemýšlíš o něčem... Nebo možná jen pozoruješ okolí."
+
+#### GOODBYE logika
+
+GOODBYE **není v promptu pro AI** - odchody jsou řízeny čistě stay_drive:
+- stay_drive klesá při mrtvé scéně, dlouhém tichu, nízké energii
+- Když stay_drive <= 0.1, NPC chce odejít
+- Detekce loučení v textu (heuristika) nastaví stay_drive = 0
+
+#### DEV_INTENT_LOG
+
+Globální seznam pro debug:
+```python
+DEV_INTENT_LOG: List[IntentLogEntry] = []
+# Loguje: START_SCENE, END_SCENE, WORLD_EVENT, NPC_SCORE, AI_CALL, AI_RESPONSE
+# Nově: ANTI_REP_REJECT, ANTI_REP_DOWNGRADE, ASSISTED_INSTRUCTION
+```
+
+---
+
+### 4. Director (rules/director.py) - Fallback
+
+Director se používá jako fallback pro jednoho NPC na lavičce nebo když je `USE_BEHAVIOR_ENGINE = False`.
 
 Režisér který řídí dramaturgii scény dynamicky na základě osobností NPC.
 
@@ -523,23 +766,32 @@ Stačí přidat záznam do `game/data/postavy.json`:
 
 ```python
 # Rozlišení
-RES_X, RES_Y = 1200, 800
+RES_X, RES_Y = 1280, 720
 
 # Automatický tah
-AUTO_TAH_INTERVAL = 8.0  # sekundy
+AUTO_TAH_INTERVAL = 2.2  # sekundy
 
 # Bublina
-BUBLINA_MIN_TRVANI = 3.0
-BUBLINA_RYCHLOST = 15    # znaků/sekunda
+BUBLINA_MIN_TRVANI = 4.0
+BUBLINA_RYCHLOST = 12    # znaků/sekunda
 
 # Pravděpodobnosti
 PRAVDEPODOBNOST_PRICHODU = 0.22
 PRAVDEPODOBNOST_ODCHODU_SAM = 0.15
-PRAVDEPODOBNOST_ODCHODU_PO_ROZHOVORU = 0.2
-MIN_REPLIK_PRO_ODCHOD = 4
+PRAVDEPODOBNOST_ODCHODU_PO_ROZHOVORU = 0.16
+MIN_REPLIK_PRO_ODCHOD = 16
 
 # Ticho
 TICHO_SAM = 0.88  # šance že NPC sám mlčí
+
+# === BEHAVIOR ENGINE ===
+USE_BEHAVIOR_ENGINE = True      # True = nový engine, False = starý Director
+BEHAVIOR_ENGINE_TOP_K = 1       # Kolik NPC jde do AI za tah
+BEHAVIOR_COOLDOWN_SPEECH = 1    # Cooldown po promluvení (tahy)
+BEHAVIOR_ENERGY_COST_SPEECH = 0.15  # Spotřeba energie za mluvení
+BEHAVIOR_ENERGY_REGEN_TURN = 0.05   # Regenerace energie za tah
+BEHAVIOR_MIN_SCORE_TO_SPEAK = 0.15  # Minimální skóre pro mluvení
+DEV_INTENT_LOG_ENABLED = True   # Detailní logování enginu
 ```
 
 ---
@@ -592,7 +844,15 @@ Veškerá logika je **dynamická**:
 
 Nové postavy = jen editace JSON souboru. Žádné změny kódu.
 
-### 3. Adaptivní Director
+### 3. NPC autonomie (Behavior Engine)
+
+NPC **rozhodují sami**:
+- Engine generuje jen WorldEvent (STIMULUS/PRESSURE/SILENCE)
+- NPC volí typ odpovědi (speech/thought/action/nothing)
+- Vnitřní stavy (energy, drive, cooldown) ovlivňují chování
+- Anti-repetition brání opakování
+
+### 4. Adaptivní Director (fallback)
 
 Director **nenutí**, jen **navádí**:
 - Sleduje průběh rozhovoru
@@ -614,6 +874,7 @@ Director **nenutí**, jen **navádí**:
 
 ## Budoucí vylepšení
 
+- [x] Behavior Engine v1 - NPC rozhodují sami
 - [ ] Více archetypů postav
 - [ ] Denní/noční cyklus
 - [ ] Zvukové efekty

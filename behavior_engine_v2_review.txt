@@ -1,0 +1,581 @@
+================================================================================
+BEHAVIOR ENGINE V2 - OPRAVY PODLE CHATGPT REVIEW
+================================================================================
+Projekt: Lavička nad mořem
+Popis: NPC simulace rozhovorů s lokálním LLM (Pygame)
+
+ZMĚNY V TÉTO VERZI (v2):
+1. DriveUpdater - dynamická aktualizace speak_drive a stay_drive
+2. Post-check anti-repetition s downgrade logikou
+3. SceneContext rozlišuje aktivitu vs ticho (action/thought není "mrtvá scéna")
+4. GOODBYE odstraněno z promptu - odchody čistě na stay_drive
+5. ASSISTED mód - měkké impulsy místo příkazů
+6. WorldEventGenerator - kombinovaný turn + time cooldown
+
+================================================================================
+SOUBOR: game/engine/drive_update.py (NOVÝ)
+================================================================================
+
+"""
+drive_update.py - Dynamická aktualizace speak_drive a stay_drive.
+
+Toto je klíčový modul pro přirozené chování NPC.
+speak_drive a stay_drive se mění podle:
+- WorldEvent (PRESSURE boost, SILENCE růst pro mluvné)
+- Scene energy (nízká = klesá stay_drive)
+- Anti-repetition penalty (opakování = klesá chuť mluvit)
+- Energie NPC (nízká = klesá speak_drive)
+- Cooldown (po mluvení krátký drop)
+"""
+
+from typing import Dict, Optional
+from .types import WorldEvent, WorldEventType, NPCBehaviorState, SceneContext
+
+
+class DriveUpdater:
+    """Aktualizuje speak_drive a stay_drive NPC."""
+
+    def __init__(
+        self,
+        pressure_boost: float = 0.25,
+        silence_growth_rate: float = 0.03,
+        low_energy_penalty: float = 0.1,
+        repetition_penalty_factor: float = 0.15,
+        stay_drive_decay_on_dead_scene: float = 0.08,
+        stay_drive_decay_on_low_energy: float = 0.05,
+        stay_drive_boost_on_good_scene: float = 0.02,
+    ):
+        """
+        Args:
+            pressure_boost: Boost speak_drive při PRESSURE na NPC
+            silence_growth_rate: Růst speak_drive při SILENCE (pro mluvné)
+            low_energy_penalty: Penalizace speak_drive při nízké energii
+            repetition_penalty_factor: Snížení speak_drive za opakování
+            stay_drive_decay_on_dead_scene: Pokles stay_drive při mrtvé scéně
+            stay_drive_decay_on_low_energy: Pokles stay_drive při nízké energii NPC
+            stay_drive_boost_on_good_scene: Boost stay_drive při živé scéně
+        """
+        self.pressure_boost = pressure_boost
+        self.silence_growth_rate = silence_growth_rate
+        self.low_energy_penalty = low_energy_penalty
+        self.repetition_penalty_factor = repetition_penalty_factor
+        self.stay_drive_decay_on_dead_scene = stay_drive_decay_on_dead_scene
+        self.stay_drive_decay_on_low_energy = stay_drive_decay_on_low_energy
+        self.stay_drive_boost_on_good_scene = stay_drive_boost_on_good_scene
+
+    def update_drives(
+        self,
+        state: NPCBehaviorState,
+        npc_data: Dict,
+        world_event: WorldEvent,
+        scene_context: SceneContext,
+        anti_rep_penalty: float = 0.0,
+        was_addressed: bool = False,
+    ) -> None:
+        """
+        Aktualizuje speak_drive a stay_drive NPC.
+
+        Args:
+            state: Stav NPC k aktualizaci (mutuje se)
+            npc_data: Data NPC z postavy.json
+            world_event: Aktuální světová událost
+            scene_context: Kontext scény
+            anti_rep_penalty: Penalizace za opakování (0-1)
+            was_addressed: Bylo NPC přímo osloveno?
+        """
+        povaha = npc_data.get("povaha", {})
+        mluvnost = povaha.get("mluvnost", 0.5)
+
+        # === SPEAK DRIVE ===
+        self._update_speak_drive(
+            state, mluvnost, world_event, anti_rep_penalty, was_addressed
+        )
+
+        # === STAY DRIVE ===
+        self._update_stay_drive(
+            state, scene_context, anti_rep_penalty
+        )
+
+    def _update_speak_drive(
+        self,
+        state: NPCBehaviorState,
+        mluvnost: float,
+        world_event: WorldEvent,
+        anti_rep_penalty: float,
+        was_addressed: bool,
+    ) -> None:
+        """Aktualizuje speak_drive."""
+        drive = state.speak_drive
+
+        # 1. PRESSURE na toto NPC -> boost
+        if world_event.event_type == WorldEventType.PRESSURE:
+            if world_event.pressure_target == state.npc_id:
+                drive += self.pressure_boost * world_event.intensity
+
+        # 2. Přímé oslovení -> boost
+        if was_addressed:
+            drive += 0.15
+
+        # 3. SILENCE -> růst jen u mluvných postav
+        if world_event.event_type == WorldEventType.SILENCE:
+            # Introvert (mluvnost < 0.3) neroste
+            # Extrovert (mluvnost > 0.7) roste rychle
+            if mluvnost > 0.3:
+                growth = self.silence_growth_rate * (mluvnost - 0.3) * 2
+                drive += growth
+
+        # 4. Nízká energie -> penalizace
+        if state.energy < 0.3:
+            penalty = self.low_energy_penalty * (0.3 - state.energy) / 0.3
+            drive -= penalty
+
+        # 5. Cooldown -> mírná penalizace
+        if state.cooldown_turns > 0:
+            drive -= 0.05 * state.cooldown_turns
+
+        # 6. Anti-repetition penalty -> snížení chuti mluvit
+        if anti_rep_penalty > 0:
+            drive -= self.repetition_penalty_factor * anti_rep_penalty
+
+        # Clamp na 0-1
+        state.speak_drive = max(0.0, min(1.0, drive))
+
+    def _update_stay_drive(
+        self,
+        state: NPCBehaviorState,
+        scene_context: SceneContext,
+        anti_rep_penalty: float,
+    ) -> None:
+        """Aktualizuje stay_drive."""
+        drive = state.stay_drive
+
+        # 1. Mrtvá scéna (is_dying) -> klesá chuť zůstat
+        if scene_context.is_dying():
+            drive -= self.stay_drive_decay_on_dead_scene
+
+        # 2. Dlouhé ticho -> mírný pokles
+        if scene_context.consecutive_silence >= 3:
+            drive -= 0.03 * (scene_context.consecutive_silence - 2)
+
+        # 3. Nízká energie NPC -> klesá chuť zůstat
+        if state.energy < 0.2:
+            drive -= self.stay_drive_decay_on_low_energy
+
+        # 4. Vysoká repetice -> nuda, klesá chuť zůstat
+        if anti_rep_penalty > 0.5:
+            drive -= 0.05 * (anti_rep_penalty - 0.5)
+
+        # 5. Živá scéna (vysoká scene_energy) -> boost
+        if scene_context.scene_energy > 0.6:
+            drive += self.stay_drive_boost_on_good_scene
+
+        # 6. Příliš dlouhý rozhovor -> únava
+        if scene_context.total_speeches > 20:
+            drive -= 0.02 * (scene_context.total_speeches - 20) / 10
+
+        # Clamp na 0-1
+        state.stay_drive = max(0.0, min(1.0, drive))
+
+    def on_after_speech(
+        self,
+        state: NPCBehaviorState,
+        was_successful: bool = True,
+    ) -> None:
+        """
+        Zavoláno po úspěšné replice.
+
+        Args:
+            state: Stav NPC
+            was_successful: Byla replika úspěšná (ne rejected)?
+        """
+        if was_successful:
+            # Po mluvení krátký drop speak_drive
+            state.speak_drive = max(0.0, state.speak_drive - 0.1)
+        else:
+            # Rejected (anti-rep) -> frustrující, ale ne moc
+            state.speak_drive = max(0.0, state.speak_drive - 0.05)
+
+
+def detect_addressing(
+    last_response_text: str,
+    npc_name: str,
+    npc_titul: str = "",
+) -> bool:
+    """
+    Detekuje jestli byla poslední replika adresována tomuto NPC.
+
+    Args:
+        last_response_text: Text poslední repliky
+        npc_name: Jméno NPC
+        npc_titul: Titul NPC (Babička, Manažer...)
+
+    Returns:
+        True pokud bylo NPC osloveno
+    """
+    if not last_response_text:
+        return False
+
+    text_lower = last_response_text.lower()
+
+    # Kontrola jména
+    if npc_name and npc_name.lower() in text_lower:
+        return True
+
+    # Kontrola titulu
+    if npc_titul and npc_titul.lower() in text_lower:
+        return True
+
+    # Obecné oslovení (Vy, Ty na začátku věty)
+    addressing_patterns = [
+        "vy ", "ty ", "vám ", "vás ", "tobě ", "tebe ",
+        " vy?", " ty?", "a vy", "a ty",
+    ]
+    for pattern in addressing_patterns:
+        if pattern in text_lower:
+            return True
+
+    return False
+
+
+================================================================================
+SOUBOR: game/engine/types.py - SceneContext (UPRAVENO)
+================================================================================
+
+@dataclass
+class SceneContext:
+    """Kontext aktuální scény pro engine."""
+    turn_number: int = 0
+    last_speech_turn: int = 0
+    last_activity_turn: int = 0  # Poslední tah s jakoukoli aktivitou
+    total_speeches: int = 0
+    total_actions: int = 0
+    total_thoughts: int = 0
+    scene_energy: float = 0.5
+    consecutive_silence: int = 0  # Počet tahů bez řeči
+    consecutive_inactivity: int = 0  # Počet tahů bez jakékoli aktivity
+
+    def on_speech(self) -> None:
+        """Zavoláno když někdo promluvil."""
+        self.last_speech_turn = self.turn_number
+        self.last_activity_turn = self.turn_number
+        self.total_speeches += 1
+        self.consecutive_silence = 0
+        self.consecutive_inactivity = 0
+        self.scene_energy = min(1.0, self.scene_energy + 0.1)
+
+    def on_action(self) -> None:
+        """Zavoláno při fyzické akci (střední aktivita)."""
+        self.last_activity_turn = self.turn_number
+        self.total_actions += 1
+        self.consecutive_inactivity = 0
+        # Action nepřeruší consecutive_silence (pro účely ticha v rozhovoru)
+        # ale je to aktivita - scene_energy mírně roste
+        self.scene_energy = min(1.0, self.scene_energy + 0.03)
+
+    def on_thought(self) -> None:
+        """Zavoláno při vnitřní myšlence (malá aktivita)."""
+        self.last_activity_turn = self.turn_number
+        self.total_thoughts += 1
+        self.consecutive_inactivity = 0
+        # Thought je minimální aktivita
+        self.scene_energy = min(1.0, self.scene_energy + 0.01)
+
+    def on_silence(self) -> None:
+        """Zavoláno když nikdo nepromluvil."""
+        self.consecutive_silence += 1
+        self.scene_energy = max(0.0, self.scene_energy - 0.05)
+
+    def on_nothing(self) -> None:
+        """Zavoláno při úplné nečinnosti (nothing)."""
+        self.consecutive_silence += 1
+        self.consecutive_inactivity += 1
+        self.scene_energy = max(0.0, self.scene_energy - 0.07)
+
+    def on_turn_end(self) -> None:
+        """Zavoláno na konci tahu."""
+        self.turn_number += 1
+
+    def is_dying(self) -> bool:
+        """Je scéna 'umírající'? (pro ASSISTED mód)"""
+        # Scéna umírá když je dlouhá neaktivita (ne jen ticho)
+        return self.consecutive_inactivity >= 2 and self.scene_energy < 0.15
+
+    def is_stale(self) -> bool:
+        """Je scéna 'zatuchlá'? (dlouho bez speech, ale nějaká aktivita je)"""
+        return self.consecutive_silence >= 4 and self.scene_energy < 0.3
+
+
+================================================================================
+SOUBOR: game/engine/anti_repetition.py (ROZŠÍŘENO)
+================================================================================
+
+# ... existující kód ...
+
+    def should_reject(
+        self,
+        npc_id: str,
+        proposed_text: str,
+        threshold: float = 0.6,
+    ) -> bool:
+        """
+        Rozhodne jestli by měla být replika odmítnuta kvůli opakování.
+
+        Args:
+            npc_id: ID NPC
+            proposed_text: Navrhovaný text
+            threshold: Práh pro odmítnutí (default 0.6)
+
+        Returns:
+            True pokud by replika měla být odmítnuta
+        """
+        penalty = self.get_penalty(npc_id, proposed_text)
+        return penalty > threshold
+
+    def get_rejection_action(
+        self,
+        npc_id: str,
+        proposed_text: str,
+    ) -> str:
+        """
+        Vrátí doporučenou akci při vysoké repetici.
+
+        Args:
+            npc_id: ID NPC
+            proposed_text: Navrhovaný text
+
+        Returns:
+            "accept" | "downgrade_to_thought" | "downgrade_to_action" | "reject"
+        """
+        penalty = self.get_penalty(npc_id, proposed_text)
+
+        if penalty < 0.4:
+            return "accept"
+        elif penalty < 0.6:
+            return "downgrade_to_thought"
+        elif penalty < 0.8:
+            return "downgrade_to_action"
+        else:
+            return "reject"
+
+
+================================================================================
+SOUBOR: game/engine/world_event.py (UPRAVENO)
+================================================================================
+
+class WorldEventGenerator:
+    """Generátor světových událostí."""
+
+    def __init__(
+        self,
+        ambient_time_cooldown: float = 20.0,
+        ambient_turn_cooldown: int = 3,
+        ambient_chance: float = 0.15,
+    ):
+        """
+        Args:
+            ambient_time_cooldown: Minimální čas (sekundy) mezi ambient událostmi
+            ambient_turn_cooldown: Minimální počet tahů mezi ambient událostmi
+            ambient_chance: Šance na ambient událost (po splnění cooldownů)
+        """
+        self._last_ambient_time: float = 0
+        self._last_ambient_turn: int = -100
+        self._ambient_time_cooldown = ambient_time_cooldown
+        self._ambient_turn_cooldown = ambient_turn_cooldown
+        self._ambient_chance = ambient_chance
+
+    # ... generate() beze změn ...
+
+    def _should_generate_ambient(self, current_turn: int) -> bool:
+        """
+        Má se generovat ambient událost?
+
+        Kombinuje turn-based i time-based cooldown pro robustní chování
+        nezávisle na rychlosti automatu.
+        """
+        # Time cooldown check
+        if time.time() - self._last_ambient_time < self._ambient_time_cooldown:
+            return False
+
+        # Turn cooldown check
+        if current_turn - self._last_ambient_turn < self._ambient_turn_cooldown:
+            return False
+
+        # Šance na ambient událost
+        return random.random() < self._ambient_chance
+
+
+================================================================================
+SOUBOR: game/engine/behavior_engine.py (UPRAVENO)
+================================================================================
+
+# Nové importy
+from .drive_update import DriveUpdater, detect_addressing
+
+# ASSISTED mód - měkké impulsy, ne příkazy
+ASSISTED_OPTIONS: List[AssistedOption] = [
+    AssistedOption(
+        label="Nové téma",
+        instruction="Napadá tě něco, co bys mohl/a zmínit - možná něco co vidíš, slyšíš, nebo o čem přemýšlíš. Ale klidně můžeš i mlčet.",
+    ),
+    AssistedOption(
+        label="Osobní otázka",
+        instruction="Možná by ses mohl/a na něco zeptat - ale jen pokud tě to opravdu zajímá. Nemusíš.",
+    ),
+    AssistedOption(
+        label="Myšlenka",
+        instruction="Přemýšlíš o něčem, co by stálo za zmínku. Nebo možná jen pozoruješ okolí.",
+    ),
+]
+
+
+class BehaviorEngine:
+    def __init__(self, ...):
+        # ... existující ...
+        self.drive_updater = DriveUpdater()
+
+    def process_turn(self, ai_call_fn, forced_event):
+        # ... 1-2. Update stavů a generuj WorldEvent ...
+
+        # 3. Získej penalizace za opakování
+        anti_rep_penalties = self.anti_rep.get_all_penalties(
+            list(self._npc_states.keys())
+        )
+
+        # 3.5 Update drives pro všechna NPC (NOVÉ)
+        for npc_id, state in self._npc_states.items():
+            npc_data = self._npc_data_map.get(npc_id, {})
+            was_addressed = False
+            if self._last_response_text and self._last_speaker_id != npc_id:
+                was_addressed = detect_addressing(
+                    self._last_response_text,
+                    npc_data.get("jmeno", ""),
+                    npc_data.get("titul", ""),
+                )
+
+            self.drive_updater.update_drives(
+                state=state,
+                npc_data=npc_data,
+                world_event=world_event,
+                scene_context=self._scene_context,
+                anti_rep_penalty=anti_rep_penalties.get(npc_id, 0.0),
+                was_addressed=was_addressed,
+            )
+
+        # 4. Skóruj NPC a vyber TOP K
+        # ... zbytek beze změn ...
+
+    def _process_response(self, response, world_event) -> NPCResponse:
+        """Zpracuje odpověď od AI a aktualizuje stavy."""
+        npc_id = response.npc_id
+        state = self._npc_states.get(npc_id)
+
+        if response.is_speech():
+            # Post-check anti-repetition (NOVÉ)
+            rejection_action = self.anti_rep.get_rejection_action(npc_id, response.text)
+
+            if rejection_action == "reject":
+                # Úplné odmítnutí - změň na nothing
+                _log("ANTI_REP_REJECT", {"npc_id": npc_id, "action": "reject"})
+                response = NPCResponse(npc_id=npc_id, response_type=ResponseType.NOTHING)
+                self._scene_context.on_nothing()
+                self._scene_context.on_turn_end()
+                if state:
+                    self.drive_updater.on_after_speech(state, was_successful=False)
+                return response
+
+            elif rejection_action == "downgrade_to_thought":
+                # Downgrade na myšlenku
+                _log("ANTI_REP_DOWNGRADE", {"npc_id": npc_id, "action": "thought"})
+                response = NPCResponse(
+                    npc_id=npc_id,
+                    response_type=ResponseType.THOUGHT,
+                    text=response.text
+                )
+
+            elif rejection_action == "downgrade_to_action":
+                # Downgrade na akci - generuj obecnou akci
+                _log("ANTI_REP_DOWNGRADE", {"npc_id": npc_id, "action": "action"})
+                generic_actions = [
+                    "Podívá se na moře.",
+                    "Zamyšleně přikývne.",
+                    "Pozoruje okolí.",
+                    "Pousměje se.",
+                ]
+                response = NPCResponse(
+                    npc_id=npc_id,
+                    response_type=ResponseType.ACTION,
+                    text=random.choice(generic_actions)
+                )
+
+        # Zpracuj podle finálního typu
+        if response.is_speech():
+            # ... update + drive_updater.on_after_speech(state, True) ...
+            self._scene_context.on_speech()
+
+        elif response.response_type == ResponseType.THOUGHT:
+            self._scene_context.on_thought()  # NOVÉ - ne on_silence!
+
+        elif response.response_type == ResponseType.ACTION:
+            self._scene_context.on_action()  # NOVÉ - ne on_silence!
+
+        elif response.response_type == ResponseType.NOTHING:
+            self._scene_context.on_nothing()  # NOVÉ - úplná nečinnost
+
+        elif response.is_leaving():
+            # ... stay_drive = 0 ...
+            self._scene_context.on_speech()
+
+        self._scene_context.on_turn_end()
+        return response
+
+
+================================================================================
+SHRNUTÍ OPRAV PODLE CHATGPT
+================================================================================
+
+1. speak_drive se nyní DYNAMICKY MĚNÍ:
+   - PRESSURE → boost
+   - Oslovení → boost
+   - SILENCE → růst pro mluvné
+   - Nízká energie → penalizace
+   - Anti-rep penalty → penalizace
+
+2. stay_drive se nyní DYNAMICKY MĚNÍ:
+   - Mrtvá scéna → klesá
+   - Dlouhé ticho → klesá
+   - Nízká energie → klesá
+   - Vysoká repetice → klesá
+   - Živá scéna → boost
+
+3. Anti-repetition POST-CHECK:
+   - Po AI odpovědi se kontroluje opakování
+   - penalty < 0.4 → accept
+   - penalty 0.4-0.6 → downgrade_to_thought
+   - penalty 0.6-0.8 → downgrade_to_action (generic)
+   - penalty > 0.8 → reject (nothing)
+
+4. consecutive_inactivity vs consecutive_silence:
+   - on_speech() → reset obou, energy +0.1
+   - on_action() → reset inactivity, energy +0.03
+   - on_thought() → reset inactivity, energy +0.01
+   - on_nothing() → obě ++, energy -0.07
+   - is_dying() kontroluje INACTIVITY, ne silence
+
+5. GOODBYE není v promptu:
+   - AI neví o typu "goodbye"
+   - Odchody řízeny stay_drive logikou
+   - Detekce loučení v textu (heuristika) → stay_drive = 0
+
+6. ASSISTED mód - měkké formulace:
+   - "Napadá tě... Ale klidně můžeš i mlčet."
+   - "Možná by ses... ale jen pokud tě to zajímá. Nemusíš."
+   - Žádné příkazy typu "Zkus..."
+
+7. Ambient events - turn + time cooldown:
+   - ambient_time_cooldown = 20s
+   - ambient_turn_cooldown = 3 tahy
+   - Oba musí být splněny + 15% šance
+
+================================================================================
+KONEC SOUBORU
+================================================================================

@@ -25,6 +25,9 @@ from .parser import parse_response, parse_summary
 from .prompts import PromptBuilder
 from .logger import get_ai_logger
 
+# Validní typy odpovědí (rozšířeno o action a nothing pro BehaviorEngine)
+VALID_RESPONSE_TYPES = {"speech", "thought", "goodbye", "action", "nothing"}
+
 
 class AIClient:
     """
@@ -216,6 +219,132 @@ class AIClient:
         except Exception as e:
             self._logger.log_response(npc['role'], "", None, str(e))
             safe_print(f"Chyba při shrnutí: {e}")
+            return None
+
+    def get_engine_response(
+        self,
+        npc: dict,
+        soused: Optional[dict],
+        historie: list,
+        relationship_rules: dict,
+        memory_context: str,
+        world_event_desc: str,
+        extra_instruction: str = "",
+    ) -> Optional[dict]:
+        """
+        Získá odpověď od AI pro BehaviorEngine.
+
+        Na rozdíl od get_response používá WorldEvent místo forced_event
+        a podporuje nové typy odpovědí (action, nothing).
+
+        Args:
+            npc: NPC které má odpovědět
+            soused: Druhé NPC (nebo None)
+            historie: Historie rozhovoru
+            relationship_rules: Pravidla vztahu
+            memory_context: Kontext z paměti
+            world_event_desc: Popis světové události
+            extra_instruction: Extra instrukce (např. z ASSISTED módu)
+
+        Returns:
+            {"type": "speech"|"thought"|"action"|"nothing"|"goodbye", "text": "..."} nebo None
+        """
+        # Najdi poslední repliku souseda
+        posledni_replika = None
+        if soused:
+            for h in reversed(historie[-50:]):
+                if h.get("type") == "speech" and h.get("role") == soused["role"]:
+                    posledni_replika = (h.get("text", "") or "").strip()
+                    break
+
+        # Sestav roleplay log
+        roleplay_log = self._prompt_builder.build_roleplay_log(
+            npc, soused, historie, limit=8
+        )
+
+        # Sestav prompt pro engine
+        system_prompt, user_prompt = self._prompt_builder.build_engine_prompt(
+            npc=npc,
+            soused=soused,
+            roleplay_log=roleplay_log,
+            posledni_replika=posledni_replika,
+            relationship_rules=relationship_rules,
+            memory_context=memory_context,
+            world_event_desc=world_event_desc,
+            extra_instruction=extra_instruction,
+        )
+
+        # Loguj request
+        self._logger.log_request(npc['role'], "engine", system_prompt, user_prompt)
+
+        # Volej AI
+        try:
+            if DEBUG_AI:
+                safe_print(f"\n--- ENGINE PROMPT ({npc['role']}) ---")
+                preview = system_prompt[:500] + "..." if len(system_prompt) > 500 else system_prompt
+                safe_print(preview)
+
+            response = self._client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=AI_TEMPERATURE,
+                max_tokens=AI_MAX_TOKENS,
+            )
+
+            raw = response.choices[0].message.content
+            safe_print(f"RAW ENGINE ({npc['role']}): {raw}")
+
+            # Parsuj odpověď
+            data = parse_response(raw)
+            if not data:
+                self._logger.log_response(npc['role'], raw, None)
+                return None
+
+            text = (data.get("text", "") or "").strip()
+            typ = (data.get("type", "speech") or "speech").strip().lower()
+
+            # Validace typu
+            if typ not in VALID_RESPONSE_TYPES:
+                typ = "speech"  # Fallback
+
+            # Pro nothing a action může být text kratší nebo prázdný
+            if typ in ("nothing",):
+                # Pro nothing je OK nemít text
+                if not text:
+                    text = ""
+            elif typ == "action":
+                # Pro action musí být alespoň nějaký text
+                if not text:
+                    self._logger.log_response(npc['role'], raw, None, "Action bez textu")
+                    return None
+            else:
+                # Pro speech/thought validace délky
+                if not text or len(text) > 220:
+                    self._logger.log_response(npc['role'], raw, None, "Text prázdný nebo moc dlouhý")
+                    return None
+
+            # Kontrola forward jump (příliš rychlé návrhy schůzek)
+            familiarity = relationship_rules.get("familiarity", 0)
+            if soused and familiarity < 9 and typ == "speech":
+                if self._looks_like_forward_jump(text):
+                    self._logger.log_response(npc['role'], raw, None, "Forward jump rejected")
+                    return None
+
+            # Detekce rozloučení
+            if typ == "speech" and self._looks_like_goodbye(text):
+                typ = "goodbye"
+
+            result = {"type": typ, "text": text}
+            self._logger.log_response(npc['role'], raw, result)
+            return result
+
+        except Exception as e:
+            self._logger.log_response(npc['role'], "", None, str(e))
+            safe_print(f"Chyba LLM (engine): {e}")
+            safe_print(traceback.format_exc())
             return None
 
     def _looks_like_forward_jump(self, text: str) -> bool:

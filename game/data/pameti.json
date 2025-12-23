@@ -3,21 +3,24 @@
     "lide": {
       "delnik_franta": {
         "id": "delnik_franta",
-        "popis": "Chlap v montérkách",
+        "popis": "člověk v montérkách",
         "jmeno": "Franta",
-        "dojem": "Přátelský a pln vzpomínek na dobrodružství",
+        "dojem": "pohodový a spolehlivý člověk",
         "temata": [
+          "svatby",
           "pláž",
           "vzpomínky",
           "počasí"
         ],
         "fakta": [
+          "vzpomínky na svatební dny u moře",
+          "má rád odpočinek po práci",
           "Měl nejlepší den na pláži s mírným větříkem a teplejším sluncem.",
           "S kamarády běhal po pláži."
         ],
-        "sila": 0.62,
-        "pocet_setkani": 1,
-        "posledni_setkani": "2025-12-22T12:12:17.366687",
+        "sila": 1.0,
+        "pocet_setkani": 2,
+        "posledni_setkani": "2025-12-23T12:06:38.058122",
         "prvni_setkani": "2025-12-22T12:12:17.366687"
       },
       "manazer_petr": {
@@ -43,19 +46,23 @@
         "id": "rebelka_adela",
         "popis": "Mladá holka s barevnými vlasy",
         "jmeno": "Rebelka Adéla",
-        "dojem": "Přátelská a filozofická, má unikátní pohled na život.",
+        "dojem": "Pamětná a citlivá na magii minulosti.",
         "temata": [
+          "staré pověsti",
           "reflexe",
           "moře",
-          "klid"
+          "klid",
+          "minulost"
         ],
         "fakta": [
+          "Vzpomíná na staré příběhy z dětství.",
           "Mluvila o klidu a tichu moře.",
-          "Věří, že moře nás učí trpělivosti."
+          "Věří, že moře nás učí trpělivosti.",
+          "Pamatuje se na svatební putování u moře."
         ],
-        "sila": 0.575,
-        "pocet_setkani": 1,
-        "posledni_setkani": "2025-12-22T12:23:43.396157",
+        "sila": 1.0,
+        "pocet_setkani": 2,
+        "posledni_setkani": "2025-12-23T12:17:28.781265",
         "prvni_setkani": "2025-12-22T12:23:43.396157"
       }
     }
@@ -132,19 +139,24 @@
         "id": "babicka_vlasta",
         "popis": "Starší paní v šátku",
         "jmeno": "Vlasta",
-        "dojem": "Přátelská a filozofická povaha",
+        "dojem": "Milovníčka tradic a lásky k lidem",
         "temata": [
+          "teplé vzpomínky",
+          "podpora druhých",
+          "síla lásky",
           "Realita",
-          "Stress",
-          "Moře"
+          "Moře",
+          "Stress"
         ],
         "fakta": [
+          "Podporuje lidi a věří v sílu lásky.",
+          "Zmenšuje pocit stresu a zmatek",
           "Má sílu nás odvést do jiné reality",
-          "Zmenšuje pocit stresu a zmatek"
+          "Babička Vlasta mluví o teplech vzpomínek."
         ],
-        "sila": 0.575,
-        "pocet_setkani": 1,
-        "posledni_setkani": "2025-12-22T12:19:28.473763",
+        "sila": 1.0,
+        "pocet_setkani": 2,
+        "posledni_setkani": "2025-12-23T12:10:36.439156",
         "prvni_setkani": "2025-12-22T12:19:28.473763"
       },
       "bezdomovec_lojza": {
@@ -164,6 +176,24 @@
         "pocet_setkani": 1,
         "posledni_setkani": "2025-12-22T12:20:30.543325",
         "prvni_setkani": "2025-12-22T12:20:30.543325"
+      },
+      "delnik_franta": {
+        "id": "delnik_franta",
+        "popis": "Člověk v montérkách",
+        "jmeno": null,
+        "dojem": "Partner neudal své jméno a malo se o sobě mluvilo.",
+        "temata": [
+          "zánoví setkání",
+          "poznámost"
+        ],
+        "fakta": [
+          "Partner nosil montérky",
+          "Manažer Petr doufal v budoucí setkání"
+        ],
+        "sila": 0.575,
+        "pocet_setkani": 1,
+        "posledni_setkani": "2025-12-23T12:12:11.821453",
+        "prvni_setkani": "2025-12-23T12:12:11.821453"
       }
     }
   },
@@ -171,21 +201,26 @@
     "lide": {
       "rebelka_adela": {
         "id": "rebelka_adela",
-        "popis": "Mladá holka s barevnými vlasy",
-        "jmeno": null,
-        "dojem": "Přívětivá a otevřená k rozhovoru",
+        "popis": "mladá holka s barevnými vlasy",
+        "jmeno": "Rebelka Adéla",
+        "dojem": "přátelská, aktivní a pozorná k okolí",
         "temata": [
           "paměť",
+          "práce",
+          "rozhovory",
+          "pláž",
           "dětství",
-          "pláž"
+          "počasí"
         ],
         "fakta": [
           "Miluje mírný větřík na pláži.",
-          "Pamatuje si radostné okamžiky s kamarády."
+          "Pamatuje si radostné okamžiky s kamarády.",
+          "měla ráno procházku",
+          "zajímá se o pohledy na moře"
         ],
-        "sila": 0.575,
-        "pocet_setkani": 1,
-        "posledni_setkani": "2025-12-22T12:12:33.138450",
+        "sila": 1.0,
+        "pocet_setkani": 2,
+        "posledni_setkani": "2025-12-23T10:51:44.390238",
         "prvni_setkani": "2025-12-22T12:12:33.138450"
       },
       "bezdomovec_lojza": {
@@ -217,26 +252,49 @@
       "babicka_vlasta": {
         "id": "babicka_vlasta",
         "popis": "Starší paní v šátku",
-        "jmeno": "Babička Vlasta",
-        "dojem": "Něžná a nostalgická osobnost.",
+        "jmeno": "Vlasta",
+        "dojem": "Romantická a plná naděje na život.",
         "temata": [
+          "pověsti",
           "pohled",
+          "lásky",
           "Pohoda",
           "vzpomínky",
-          "Mládí s kamarády",
           "moře",
+          "Mládí s kamarády",
           "Vzpomínky"
         ],
         "fakta": [
-          "Miluje si užívat sluníčko a moře.",
-          "pouští se do nostalgických myšlenek",
           "miluje pohled na moře",
-          "Pamatuje se na krásné letní dny."
+          "Vrátí se na místa z minulosti.",
+          "pouští se do nostalgických myšlenek",
+          "Má ráda pověst o Orfeu a Eurydice.",
+          "Pamatuje se na krásné letní dny.",
+          "Miluje si užívat sluníčko a moře."
         ],
         "sila": 1.0,
-        "pocet_setkani": 2,
-        "posledni_setkani": "2025-12-22T13:37:40.809053",
+        "pocet_setkani": 3,
+        "posledni_setkani": "2025-12-23T12:15:48.891754",
         "prvni_setkani": "2025-12-22T12:37:30.645550"
+      },
+      "manazer_petr": {
+        "id": "manazer_petr",
+        "popis": "Muž v obleku",
+        "jmeno": "Petr",
+        "dojem": "Spolehlivý a preferuje soukromí.",
+        "temata": [
+          "Moře",
+          "Relaxace",
+          "Svobodné časování"
+        ],
+        "fakta": [
+          "Svatba u moře mu připadá romantická.",
+          "Preferuje samotu na pohodlném místě."
+        ],
+        "sila": 0.575,
+        "pocet_setkani": 1,
+        "posledni_setkani": "2025-12-23T12:07:52.658343",
+        "prvni_setkani": "2025-12-23T12:07:52.658343"
       }
     }
   },
@@ -245,58 +303,76 @@
       "rebelka_adela": {
         "id": "rebelka_adela",
         "popis": "Mladá holka s barevnými vlasy",
-        "jmeno": null,
-        "dojem": "Přátelská a pozitivní nálada, otevřená k rozhovoru.",
+        "jmeno": "Rebelka Adéla",
+        "dojem": "Přátelská a otevřená, má zájem o okolí.",
         "temata": [
+          "pohled na moře",
           "moře",
+          "chladný počasí",
           "slunečné odpoledne",
+          "rozhovor",
           "počasí"
         ],
         "fakta": [
+          "Je spokojená s mým pohovorem.",
           "Doufá v teplé moře",
+          "Mluví o krásě moře v chladném počasí.",
           "Pohovořili o počasí a náladě"
         ],
-        "sila": 0.575,
-        "pocet_setkani": 1,
-        "posledni_setkani": "2025-12-22T12:17:45.595733",
+        "sila": 1.0,
+        "pocet_setkani": 2,
+        "posledni_setkani": "2025-12-23T10:48:57.606217",
         "prvni_setkani": "2025-12-22T12:17:45.595733"
       },
       "babicka_vlasta": {
         "id": "babicka_vlasta",
-        "popis": "Starší paní v šátku",
+        "popis": "starší paní v šátku",
         "jmeno": null,
-        "dojem": "Přátelská a pozitivní nálada",
+        "dojem": "romantická a nostalgická osoba",
         "temata": [
           "pohovor",
+          "lásky",
+          "úcty",
+          "počasí",
           "moře",
-          "počasí"
+          "minulost",
+          "teple",
+          "rodina"
         ],
         "fakta": [
-          "Paní mluvila o teplem počasí",
-          "Odpovídala na pohovor"
+          "Chce jít domů uvařit večeři.",
+          "měla svatební putování u moře",
+          "Připomněla si pověsti o síle lásky.",
+          "přemýšlí o minulosti",
+          "Odpovídala na pohovor",
+          "Paní mluvila o teplem počasí"
         ],
-        "sila": 0.575,
-        "pocet_setkani": 1,
-        "posledni_setkani": "2025-12-22T12:18:48.055184",
+        "sila": 1.0,
+        "pocet_setkani": 3,
+        "posledni_setkani": "2025-12-23T12:18:47.797527",
         "prvni_setkani": "2025-12-22T12:18:48.055184"
       },
       "manazer_petr": {
         "id": "manazer_petr",
-        "popis": "Muž v obleku, formálně",
+        "popis": "Muž v obleku",
         "jmeno": "Petr",
-        "dojem": "Polovičatý dojem, zdál se zdvořilý ale strohý.",
+        "dojem": "Politečný a formální, ale přátelský",
         "temata": [
+          "odcházení",
           "Konverzace",
           "Rozhovor",
+          "setkání",
           "Závěrečné pozdravy"
         ],
         "fakta": [
+          "Mluvil s Lojzou formálně a zdvořile",
           "Petr je manažer",
-          "Mluvil s Lojzou formálně a zdvořile"
+          "Chce se brzy znovu setkat",
+          "Je manažerem"
         ],
-        "sila": 0.575,
-        "pocet_setkani": 1,
-        "posledni_setkani": "2025-12-22T12:20:02.734142",
+        "sila": 1.0,
+        "pocet_setkani": 2,
+        "posledni_setkani": "2025-12-23T12:11:48.377775",
         "prvni_setkani": "2025-12-22T12:20:02.734142"
       }
     }

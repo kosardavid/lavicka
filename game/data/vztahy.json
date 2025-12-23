@@ -2,29 +2,29 @@
   "babicka_vlasta__rebelka_adela": {
     "faze": "znami",
     "tykani": false,
-    "sympatie": 0.7400000000000003,
-    "pocet_setkani": 37,
+    "sympatie": 0.8600000000000004,
+    "pocet_setkani": 43,
     "historie": []
   },
   "babicka_vlasta__manazer_petr": {
-    "faze": "cizinci",
+    "faze": "tvare",
     "tykani": false,
-    "sympatie": 0.21999999999999997,
-    "pocet_setkani": 11,
+    "sympatie": 0.3,
+    "pocet_setkani": 15,
     "historie": []
   },
   "babicka_vlasta__delnik_franta": {
     "faze": "znami",
     "tykani": false,
-    "sympatie": 0.6400000000000002,
-    "pocet_setkani": 32,
+    "sympatie": 1.0,
+    "pocet_setkani": 52,
     "historie": []
   },
   "delnik_franta__rebelka_adela": {
-    "faze": "cizinci",
+    "faze": "znami",
     "tykani": false,
-    "sympatie": 0.02,
-    "pocet_setkani": 1,
+    "sympatie": 0.4200000000000001,
+    "pocet_setkani": 21,
     "historie": []
   },
   "bezdomovec_lojza__delnik_franta": {
@@ -35,24 +35,24 @@
     "historie": []
   },
   "bezdomovec_lojza__rebelka_adela": {
-    "faze": "cizinci",
-    "tykani": false,
-    "sympatie": 0.04,
-    "pocet_setkani": 2,
-    "historie": []
-  },
-  "babicka_vlasta__bezdomovec_lojza": {
-    "faze": "cizinci",
+    "faze": "tvare",
     "tykani": false,
     "sympatie": 0.16,
     "pocet_setkani": 8,
     "historie": []
   },
-  "bezdomovec_lojza__manazer_petr": {
-    "faze": "cizinci",
+  "babicka_vlasta__bezdomovec_lojza": {
+    "faze": "znami",
     "tykani": false,
-    "sympatie": 0.19999999999999998,
-    "pocet_setkani": 10,
+    "sympatie": 0.5800000000000002,
+    "pocet_setkani": 29,
+    "historie": []
+  },
+  "bezdomovec_lojza__manazer_petr": {
+    "faze": "tvare",
+    "tykani": false,
+    "sympatie": 0.21999999999999997,
+    "pocet_setkani": 11,
     "historie": []
   },
   "manazer_petr__rebelka_adela": {
@@ -60,6 +60,13 @@
     "tykani": false,
     "sympatie": 0.02,
     "pocet_setkani": 1,
+    "historie": []
+  },
+  "delnik_franta__manazer_petr": {
+    "faze": "cizinci",
+    "tykani": false,
+    "sympatie": 0.08,
+    "pocet_setkani": 4,
     "historie": []
   }
 }

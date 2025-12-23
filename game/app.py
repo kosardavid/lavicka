@@ -20,6 +20,13 @@ from .settings import (
     PRAVDEPODOBNOST_PRICHODU, PRAVDEPODOBNOST_ODCHODU_SAM,
     PRAVDEPODOBNOST_ODCHODU_PO_ROZHOVORU, MIN_REPLIK_PRO_ODCHOD,
     TICHO_SAM,
+    USE_BEHAVIOR_ENGINE,
+    BEHAVIOR_ENGINE_TOP_K,
+    BEHAVIOR_COOLDOWN_SPEECH,
+    BEHAVIOR_ENERGY_COST_SPEECH,
+    BEHAVIOR_ENERGY_REGEN_TURN,
+    BEHAVIOR_MIN_SCORE_TO_SPEAK,
+    DEV_INTENT_LOG_ENABLED,
 )
 from .npc import ARCHETYPY, get_available_archetypes
 from .rules import RelationshipManager, EventManager, Director
@@ -27,6 +34,7 @@ from .ai import AIClient
 from .memory import get_pamet, vytvor_kontext_z_pameti
 from .ui import Renderer, ChatPanel, InputBox
 from .utils import safe_print
+from .engine import BehaviorEngine, NPCResponse, ResponseType, WorldEvent, DEV_INTENT_LOG
 
 
 class LavickaApp:
@@ -63,6 +71,15 @@ class LavickaApp:
         self.ai_client = AIClient()
         self.pamet = get_pamet()
 
+        # BehaviorEngine (nový systém)
+        self.behavior_engine = BehaviorEngine(
+            top_k=BEHAVIOR_ENGINE_TOP_K,
+            cooldown_after_speech=BEHAVIOR_COOLDOWN_SPEECH,
+            energy_cost_speech=BEHAVIOR_ENERGY_COST_SPEECH,
+            energy_regen_turn=BEHAVIOR_ENERGY_REGEN_TURN,
+            min_score_to_speak=BEHAVIOR_MIN_SCORE_TO_SPEAK,
+        )
+
         # Řízení
         self.ai_mysli = False
         self.automat = True
@@ -92,50 +109,210 @@ class LavickaApp:
             # Událost prostředí
             forced_event = self.events.get_pending_event()
 
-            # Automatická událost od Directora
-            if not forced_event and self.director.is_active():
-                auto_event = self.director.suggest_event()
-                if auto_event:
-                    self.add_environment_event(auto_event)
-                    forced_event = auto_event
-
-            # Director plánuje reakce na event
-            event_reactions = {}
-            if forced_event and self.director.is_active():
-                npcs_on_scene = [s for s in self.sedadla if s]
-                event_reactions = self.director.plan_event_reaction(forced_event, npcs_on_scene)
-
-            # Rozhodnutí o tichu
-            if not self._should_speak(obsazeno, forced_event):
+            # Použij BehaviorEngine pro dva NPC
+            if USE_BEHAVIOR_ENGINE and len(obsazeno) == 2 and self.behavior_engine.is_active():
+                self._tah_engine(forced_event)
+                if forced_event:
+                    self.events.clear_pending()
                 return
 
-            # Výběr mluvčího
-            idx = self._vyber_mluvciho(obsazeno, forced_event)
-            npc = self.sedadla[idx]
-            soused = self.sedadla[1 - idx] if len(obsazeno) == 2 else None
-
-            # Získání instrukce od Directora pro event
-            director_instruction = None
-            if event_reactions and npc:
-                npc_reaction = event_reactions.get(npc.get('id'))
-                if npc_reaction and npc_reaction.get('should_react'):
-                    director_instruction = npc_reaction.get('instruction')
-
-            # Získání odpovědi od AI
-            resp = self._get_ai_response(npc, soused, forced_event, director_instruction)
-
-            if forced_event:
-                self.events.clear_pending()
-
-            if not resp:
-                return
-
-            # Zpracování odpovědi
-            self._zpracuj_odpoved(npc, soused, resp, idx)
+            # Fallback: původní logika pro jednoho NPC nebo když engine není aktivní
+            self._tah_legacy(obsazeno, forced_event)
 
         finally:
             with self._lock:
                 self.ai_mysli = False
+
+    def _tah_engine(self, forced_event: Optional[str]):
+        """Provede tah pomocí BehaviorEngine."""
+
+        def ai_call_fn(npc_id: str, world_event: WorldEvent, extra_instruction: str) -> Optional[NPCResponse]:
+            """Callback pro volání AI z enginu."""
+            # Najdi NPC podle ID
+            npc = None
+            soused = None
+            idx = -1
+            for i, s in enumerate(self.sedadla):
+                if s and s.get('id') == npc_id:
+                    npc = s
+                    idx = i
+                elif s:
+                    soused = s
+
+            if not npc:
+                return None
+
+            # Příprava kontextu
+            relationship_rules = {}
+            memory_context = ""
+
+            if soused:
+                vztah = self.relationships.get(npc, soused)
+                relationship_rules = {
+                    "pacing": self.relationships.get_pacing_rule(npc, soused),
+                    "addressing": self.relationships.get_addressing_rule(npc, soused),
+                    "topics": self.relationships.get_topic_suggestions(npc, soused),
+                    "familiarity": vztah.familiarity,
+                    "sympathy": vztah.sympathy,
+                    "tykani": vztah.tykani,
+                }
+                memory_context = vytvor_kontext_z_pameti(
+                    self.pamet, npc['id'], soused['id'], vztah.familiarity
+                )
+
+            # Volej AI s engine promptem
+            resp = self.ai_client.get_engine_response(
+                npc=npc,
+                soused=soused,
+                historie=self.historie,
+                relationship_rules=relationship_rules,
+                memory_context=memory_context,
+                world_event_desc=world_event.description,
+                extra_instruction=extra_instruction,
+            )
+
+            if not resp:
+                return None
+
+            # Konvertuj na NPCResponse
+            typ_str = resp.get('type', 'speech')
+            try:
+                response_type = ResponseType(typ_str)
+            except ValueError:
+                response_type = ResponseType.SPEECH
+
+            return NPCResponse(
+                npc_id=npc_id,
+                response_type=response_type,
+                text=resp.get('text', ''),
+            )
+
+        # Zavolej engine
+        response = self.behavior_engine.process_turn(
+            ai_call_fn=ai_call_fn,
+            forced_event=forced_event,
+        )
+
+        # Debug výpis
+        if DEV_INTENT_LOG_ENABLED:
+            safe_print(f"[ENGINE] {self.behavior_engine.get_debug_info()}")
+
+        if not response:
+            # Ticho - nikdo nemluvil
+            return
+
+        # Zpracuj odpověď
+        self._zpracuj_engine_odpoved(response)
+
+    def _zpracuj_engine_odpoved(self, response: NPCResponse):
+        """Zpracuje odpověď od BehaviorEngine."""
+        # Najdi NPC a index
+        npc = None
+        soused = None
+        idx = -1
+        for i, s in enumerate(self.sedadla):
+            if s and s.get('id') == response.npc_id:
+                npc = s
+                idx = i
+            elif s:
+                soused = s
+
+        if not npc or idx < 0:
+            return
+
+        text = response.text
+        typ = response.response_type
+
+        # Zpracuj podle typu
+        if typ == ResponseType.NOTHING:
+            # Ticho - nic nezobrazuj
+            return
+
+        if typ == ResponseType.GOODBYE:
+            npc['chce_odejit'] = True
+            typ = ResponseType.SPEECH
+
+        if typ == ResponseType.ACTION:
+            # Akce se zobrazí jako systémová zpráva
+            self._add_to_history(npc['role'], f"*{text}*", 'action')
+            # Kratší bublina pro akce
+            trvani = max(2.0, len(text) / 15.0)
+            self.aktualni_bublina = {
+                'text': f"*{text}*",
+                'is_thought': True,  # Akce vypadají jako myšlenky
+                'idx': idx,
+                'konec': time.time() + trvani,
+            }
+            return
+
+        if not text:
+            return
+
+        # Speech nebo Thought
+        msg_type = 'thought' if typ == ResponseType.THOUGHT else 'speech'
+        self._add_to_history(npc['role'], text, msg_type)
+
+        # Aktualizovat vztah
+        if soused and typ == ResponseType.SPEECH:
+            self.relationships.update_after_speech(npc, soused, text)
+            vztah_session = self.relationships.get(npc, soused)
+            self.pamet.aktualizuj_vztah(
+                npc['id'], soused['id'],
+                sympatie_zmena=0.02,
+                tykani=vztah_session.tykani if vztah_session.tykani else None
+            )
+
+        # Zobrazit bublinu
+        trvani = max(BUBLINA_MIN_TRVANI, len(text) / BUBLINA_RYCHLOST)
+        self.aktualni_bublina = {
+            'text': text,
+            'is_thought': typ == ResponseType.THOUGHT,
+            'idx': idx,
+            'konec': time.time() + trvani,
+        }
+
+    def _tah_legacy(self, obsazeno: list, forced_event: Optional[str]):
+        """Původní logika tahu (fallback pro 1 NPC nebo bez enginu)."""
+        # Automatická událost od Directora
+        if not forced_event and self.director.is_active():
+            auto_event = self.director.suggest_event()
+            if auto_event:
+                self.add_environment_event(auto_event)
+                forced_event = auto_event
+
+        # Director plánuje reakce na event
+        event_reactions = {}
+        if forced_event and self.director.is_active():
+            npcs_on_scene = [s for s in self.sedadla if s]
+            event_reactions = self.director.plan_event_reaction(forced_event, npcs_on_scene)
+
+        # Rozhodnutí o tichu
+        if not self._should_speak(obsazeno, forced_event):
+            return
+
+        # Výběr mluvčího
+        idx = self._vyber_mluvciho(obsazeno, forced_event)
+        npc = self.sedadla[idx]
+        soused = self.sedadla[1 - idx] if len(obsazeno) == 2 else None
+
+        # Získání instrukce od Directora pro event
+        director_instruction = None
+        if event_reactions and npc:
+            npc_reaction = event_reactions.get(npc.get('id'))
+            if npc_reaction and npc_reaction.get('should_react'):
+                director_instruction = npc_reaction.get('instruction')
+
+        # Získání odpovědi od AI
+        resp = self._get_ai_response(npc, soused, forced_event, director_instruction)
+
+        if forced_event:
+            self.events.clear_pending()
+
+        if not resp:
+            return
+
+        # Zpracování odpovědi
+        self._zpracuj_odpoved(npc, soused, resp, idx)
 
     def _zpracuj_prichody(self):
         """Zpracuje náhodné příchody NPC."""
@@ -152,6 +329,11 @@ class LavickaApp:
                 continue
 
             je_sam = sum(1 for s in self.sedadla if s) == 1
+
+            # Kontrola odchodu od BehaviorEngine
+            if USE_BEHAVIOR_ENGINE and self.behavior_engine.is_active():
+                if self.behavior_engine.should_npc_leave(npc.get('id', '')):
+                    npc['chce_odejit'] = True
 
             if npc.get('chce_odejit', False):
                 self._odejdi_npc(i)
@@ -202,6 +384,7 @@ class LavickaApp:
             relationship_rules = {
                 "pacing": self.relationships.get_pacing_rule(npc, soused),
                 "addressing": self.relationships.get_addressing_rule(npc, soused),
+                "topics": self.relationships.get_topic_suggestions(npc, soused),
                 "familiarity": vztah.familiarity,
                 "sympathy": vztah.sympathy,
                 "tykani": vztah.tykani,
@@ -321,6 +504,11 @@ class LavickaApp:
             self.director.start_scene(npc, soused, vztah)
             safe_print(f"[DIRECTOR] {self.director.get_debug_info()}")
 
+            # Spustit BehaviorEngine scénu
+            if USE_BEHAVIOR_ENGINE:
+                self.behavior_engine.start_scene(npc, soused)
+                safe_print(f"[ENGINE] Scéna zahájena: {npc['role']} + {soused['role']}")
+
     def _odejdi_npc(self, seat_index: int):
         """Odebere NPC ze sedadla."""
         npc = self.sedadla[seat_index]
@@ -341,6 +529,11 @@ class LavickaApp:
         if self.director.is_active():
             self.director.end_scene()
             safe_print("[DIRECTOR] Scéna ukončena")
+
+        # Ukončit BehaviorEngine scénu
+        if USE_BEHAVIOR_ENGINE and self.behavior_engine.is_active():
+            self.behavior_engine.end_scene()
+            safe_print("[ENGINE] Scéna ukončena")
 
     def _uloz_pamet(self, npc, soused):
         """Uloží paměť po rozhovoru."""

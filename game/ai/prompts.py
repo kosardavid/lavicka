@@ -91,7 +91,12 @@ ROZHOVOR:
 Právě řekl/a: "{posledni_replika if posledni_replika else "..."}"
 {event_reminder}
 Odpověz přirozeně.
-Vrať: {{"type":"speech","text":"..."}} NEBO {{"type":"thought","text":"..."}}"""
+Vrať JSON: {{"type":"TYP","text":"..."}}
+TYP může být:
+- "speech" = řekneš nahlas (normální replika)
+- "thought" = myšlenka v hlavě (zobrazí se v závorce)
+- "action" = fyzická akce bez slov (např. "Podívá se na moře.", "Přikývne.")
+- "nothing" = ticho, neříkáš nic, jen sedíš"""
 
         return (system_prompt, "Teď:")
 
@@ -264,6 +269,91 @@ DŮLEŽITÉ pravidla:
 - Neopisuj rozhovor doslova, zapiš jen to důležité
 - emoce_intenzita: 0.3 = nudný rozhovor, 0.5 = normální, 0.8 = silný zážitek
 """
+
+    def build_engine_prompt(
+        self,
+        npc: dict,
+        soused: Optional[dict],
+        roleplay_log: str,
+        posledni_replika: Optional[str],
+        relationship_rules: dict,
+        memory_context: str,
+        world_event_desc: str,
+        extra_instruction: str = "",
+    ) -> tuple:
+        """
+        Sestaví prompt pro BehaviorEngine.
+
+        Obsahuje WorldEvent místo forced_event a podporuje
+        nové typy odpovědí (action, nothing).
+
+        Args:
+            npc: Aktivní NPC
+            soused: Druhé NPC (nebo None)
+            roleplay_log: Posledních pár replik
+            posledni_replika: Poslední replika souseda
+            relationship_rules: Pravidla vztahu
+            memory_context: Kontext z paměti
+            world_event_desc: Popis světové události
+            extra_instruction: Extra instrukce (např. z ASSISTED módu)
+
+        Returns:
+            Tuple (system_prompt, user_prompt)
+        """
+        # Základní kontext
+        common = self._build_common(
+            npc=npc,
+            relationship_rules=relationship_rules,
+            memory_context=memory_context,
+            event_context="",
+            forced_event=None,
+        )
+
+        if not soused:
+            # NPC je samo
+            system_prompt = common + """
+Jsi na lavičce sám/sama. Napiš jednu krátkou vnitřní myšlenku.
+Vrať: {"type":"thought","text":"..."}"""
+            return (system_prompt, "Teď:")
+
+        # NPC má souseda
+        popis = soused.get("popis", "někdo")
+
+        # World event blok
+        world_event_block = ""
+        if world_event_desc:
+            world_event_block = f"""
+=== CO SE PRÁVĚ DĚJE ===
+{world_event_desc}
+Můžeš reagovat na tuto situaci, nebo ji ignorovat.
+"""
+
+        # Extra instrukce (z ASSISTED módu)
+        extra_block = ""
+        if extra_instruction:
+            extra_block = f"""
+=== NÁPOVĚDA ===
+{extra_instruction}
+"""
+
+        system_prompt = common + f"""
+Mluvíš s člověkem ({popis}).
+
+ROZHOVOR:
+{roleplay_log if roleplay_log else "(začátek)"}
+
+Právě řekl/a: "{posledni_replika if posledni_replika else "..."}"
+{world_event_block}
+{extra_block}
+Odpověz přirozeně. SAM/SAMA SE ROZHODNI co uděláš.
+Vrať JSON: {{"type":"TYP","text":"..."}}
+TYP může být:
+- "speech" = řekneš nahlas (normální replika)
+- "thought" = myšlenka v hlavě (zobrazí se v závorce)
+- "action" = fyzická akce bez slov (např. "Podívá se na moře.", "Přikývne.")
+- "nothing" = ticho, neříkáš nic, jen sedíš"""
+
+        return (system_prompt, "Teď:")
 
     def build_roleplay_log(
         self,

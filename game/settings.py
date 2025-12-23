@@ -49,6 +49,28 @@ AI_SUMMARY_MAX_TOKENS = 250
 # Debug
 DEBUG_AI = True
 
+# === BEHAVIOR ENGINE ===
+# Feature flag pro nový engine (True = nový, False = starý Director)
+USE_BEHAVIOR_ENGINE = True
+
+# Kolik NPC může jít do AI za jeden tah (default 1)
+BEHAVIOR_ENGINE_TOP_K = 1
+
+# Cooldown po promluvení (počet tahů)
+BEHAVIOR_COOLDOWN_SPEECH = 1
+
+# Energie - kolik se spotřebuje za mluvení
+BEHAVIOR_ENERGY_COST_SPEECH = 0.15
+
+# Energie - regenerace za tah
+BEHAVIOR_ENERGY_REGEN_TURN = 0.05
+
+# Minimální skóre pro mluvení
+BEHAVIOR_MIN_SCORE_TO_SPEAK = 0.15
+
+# DEV_INTENT_LOG - detailní logování enginu
+DEV_INTENT_LOG_ENABLED = True
+
 # === HERNÍ KONSTANTY ===
 
 # Časování

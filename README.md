@@ -6,9 +6,10 @@ NPC si pamatují lidi se kterými mluvili - ne doslovně, ale jako skutečný č
 
 ## Klíčové vlastnosti
 
+- **Behavior Engine** - NPC rozhodují sami na základě vnitřních stavů (energie, drive, cooldown)
 - **Persistentní paměť** - NPC si pamatují předchozí rozhovory
 - **Dynamické vztahy** - vztahy se vyvíjejí na základě kvality interakcí
-- **Director systém** - režisér řídí dramaturgii scén
+- **Director systém** - režisér řídí dramaturgii scén (fallback pro 1 NPC)
 - **Dynamické postavy** - nové NPC lze přidat pouze editací JSON souboru
 - **Lokální LLM** - běží na LM Studio (Qwen 2.5 nebo jiný model)
 
@@ -26,12 +27,19 @@ lavicka/
     ├── app.py             # Hlavní aplikační třída
     ├── settings.py        # Konfigurace a konstanty
     │
+    ├── engine/            # Behavior Engine (nový systém)
+    │   ├── types.py       # Datové typy (WorldEvent, NPCBehaviorState...)
+    │   ├── world_event.py # Generátor světových událostí
+    │   ├── scorer.py      # Skórování NPC pro výběr mluvčího
+    │   ├── anti_repetition.py  # Sledování opakování
+    │   └── behavior_engine.py  # Hlavní orchestrátor
+    │
     ├── npc/               # Modul pro NPC postavy
     │   ├── base.py        # Třída NPC
     │   └── archetypes.py  # Načítání postav z JSON
     │
     ├── rules/             # Herní pravidla
-    │   ├── director.py    # Režisér scény
+    │   ├── director.py    # Režisér scény (fallback)
     │   ├── relationships.py  # Vztahy mezi NPC
     │   └── events.py      # Události prostředí
     │
@@ -160,9 +168,42 @@ Stačí přidat záznam do `game/data/postavy.json`:
 
 **Žádný kód není potřeba měnit** - postava se automaticky načte a bude fungovat.
 
-## Director (Režisér scény)
+## Behavior Engine
 
-Director řídí dramaturgii rozhovoru na základě osobností NPC:
+Nový systém řízení NPC chování (pro dva NPC na lavičce):
+
+### Princip
+
+- **WorldEvent** generátor vytváří události (STIMULUS/PRESSURE/SILENCE)
+- **NPC rozhodují sami** na základě vnitřních stavů
+- **TOP K=1** NPC jde do AI za tah (minimalizace AI volání)
+- **Anti-repetition** penalizuje opakující se NPC
+
+### Stavy NPC
+
+| Stav | Rozsah | Popis |
+|------|--------|-------|
+| `speak_drive` | 0-1 | Jak moc chce mluvit |
+| `energy` | 0-1 | Energie (klesá po mluvení) |
+| `cooldown` | 0+ tahů | Čekání po promluvení |
+
+### Typy odpovědí
+
+| Typ | Popis |
+|-----|-------|
+| `speech` | Mluvená replika |
+| `thought` | Vnitřní myšlenka |
+| `action` | Fyzická akce ("Podívá se na moře") |
+| `nothing` | Ticho |
+| `goodbye` | Rozloučení a odchod |
+
+### ASSISTED mód
+
+Když scéna "umírá" (2+ tahy ticha, energie < 0.15), engine nabídne nápovědu pro NPC.
+
+## Director (Fallback)
+
+Director se používá pro jednoho NPC na lavičce nebo když je engine vypnutý.
 
 ### Trajektorie
 
@@ -172,11 +213,6 @@ Director řídí dramaturgii rozhovoru na základě osobností NPC:
 | `deep` | 14-25 replik | Hluboký, osobní rozhovor |
 | `conflict` | 6-12 replik | Konfliktní scéna |
 | `quiet` | 5-10 replik | Tiché setkání |
-
-Trajektorie se **počítá dynamicky** z `povaha` atributů obou NPC:
-- Vysoká `konfliktnost` → více konfliktů
-- Vysoká `hloubavost` → hlubší rozhovory
-- Nízká `mluvnost` → tišší setkání
 
 ### Fáze scény
 
@@ -229,6 +265,13 @@ AUTO_TAH_INTERVAL = 2.2  # sekundy mezi tahy
 
 # Debug
 DEBUG_AI = True  # Vypisuje prompty do konzole
+
+# === BEHAVIOR ENGINE ===
+USE_BEHAVIOR_ENGINE = True      # True = nový engine, False = starý Director
+BEHAVIOR_ENGINE_TOP_K = 1       # Kolik NPC jde do AI za tah
+BEHAVIOR_COOLDOWN_SPEECH = 1    # Cooldown po promluvení
+BEHAVIOR_ENERGY_COST_SPEECH = 0.15  # Spotřeba energie za mluvení
+DEV_INTENT_LOG_ENABLED = True   # Detailní logování enginu
 ```
 
 ## Licence
