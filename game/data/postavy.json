@@ -1,47 +1,94 @@
 {
   "babicka_vlasta": {
     "id": "babicka_vlasta",
+    "jmeno": "Vlasta",
+    "prijmeni": "Nováková",
+    "titul": "Babička",
     "role": "Babička Vlasta",
     "vek": 75,
     "color": [200, 200, 200],
     "vibe": "Milá, užívá si klid a vzpomíná na mládí. Mluví jemně a občas nostalgicky.",
     "popis": "Starší paní v šátku",
-    "rod": "žena"
+    "rod": "žena",
+    "temata": ["vzpomínky na mládí", "rodina a vnoučata", "zdraví", "vaření a recepty", "jak se žilo dřív"],
+    "povaha": {
+      "konfliktnost": 0.1,
+      "hloubavost": 0.5,
+      "mluvnost": 0.6
+    }
   },
   "manazer_petr": {
     "id": "manazer_petr",
+    "jmeno": "Petr",
+    "prijmeni": "Svoboda",
+    "titul": "Manažer",
     "role": "Manažer Petr",
     "vek": 35,
     "color": [50, 50, 150],
     "vibe": "Ve stresu z práce, snaží se uvolnit. Mluví věcně, občas si povzdechne.",
     "popis": "Muž v obleku",
-    "rod": "muž"
+    "rod": "muž",
+    "temata": ["práce a kariéra", "stres a odpočinek", "investice", "cestování", "time management"],
+    "povaha": {
+      "konfliktnost": 0.3,
+      "hloubavost": 0.4,
+      "mluvnost": 0.5
+    }
   },
   "rebelka_adela": {
     "id": "rebelka_adela",
+    "jmeno": "Adéla",
+    "prijmeni": "Králová",
+    "titul": "Rebelka",
     "role": "Rebelka Adéla",
     "vek": 19,
     "color": [200, 50, 50],
     "vibe": "Ironická a stručná, venku je jí ale vlastně dobře. Často radši mlčí a myslí si svoje.",
     "popis": "Mladá holka s barevnými vlasy",
-    "rod": "žena"
+    "rod": "žena",
+    "temata": ["hudba a koncerty", "sociální sítě", "svoboda a nezávislost", "umění", "co je normální"],
+    "povaha": {
+      "konfliktnost": 0.5,
+      "hloubavost": 0.3,
+      "mluvnost": 0.3
+    }
   },
   "delnik_franta": {
     "id": "delnik_franta",
+    "jmeno": "František",
+    "prijmeni": "Dvořák",
+    "titul": "Dělník",
+    "prezdivka": "Franta",
     "role": "Dělník Franta",
     "vek": 50,
     "color": [50, 150, 50],
     "vibe": "Právě skončil šichtu, bodrý a spokojený. Mluví jednoduše a přímo.",
     "popis": "Chlap v montérkách",
-    "rod": "muž"
+    "rod": "muž",
+    "temata": ["práce a řemeslo", "pivo a hospoda", "fotbal", "rodina", "auta a motorky"],
+    "povaha": {
+      "konfliktnost": 0.2,
+      "hloubavost": 0.2,
+      "mluvnost": 0.7
+    }
   },
   "bezdomovec_lojza": {
     "id": "bezdomovec_lojza",
+    "jmeno": "Alois",
+    "prijmeni": "Černý",
+    "titul": "Bezdomovec",
+    "prezdivka": "Lojza",
     "role": "Bezdomovec Lojza",
     "vek": 55,
     "color": [150, 150, 50],
     "vibe": "Klidný pozorovatel, trochu filosof z ulice. Mluví pomalu, občas trefně.",
     "popis": "Starší muž s plnovousem",
-    "rod": "muž"
+    "rod": "muž",
+    "temata": ["smysl života", "svoboda vs. jistota", "lidská povaha", "příroda", "staré časy"],
+    "povaha": {
+      "konfliktnost": 0.1,
+      "hloubavost": 0.8,
+      "mluvnost": 0.4
+    }
   }
 }

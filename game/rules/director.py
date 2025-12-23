@@ -26,29 +26,29 @@ class SceneState:
     last_speech_time: float = field(default_factory=time.time)
 
 
-# Intenty podle fáze
+# Intenty podle fáze - varianty pro muže (m) a ženy (f)
 PHASE_INTENTS = {
     "intro": [
-        "Právě přišel, oťukává situaci.",
-        "Zkoumá, kdo vedle něj sedí.",
-        "Váhá, jestli začít rozhovor.",
+        {"m": "Právě přišel, oťukává situaci.", "f": "Právě přišla, oťukává situaci."},
+        {"m": "Zkoumá, kdo vedle něj sedí.", "f": "Zkoumá, kdo vedle ní sedí."},
+        {"m": "Váhá, jestli začít rozhovor.", "f": "Váhá, jestli začít rozhovor."},
     ],
     "developing": [
-        "",  # volný průběh
-        "Rozhovor plyne přirozeně.",
+        {"m": "", "f": ""},  # volný průběh
+        {"m": "Rozhovor plyne přirozeně.", "f": "Rozhovor plyne přirozeně."},
     ],
     "peak": [
-        "Rozhovor je v plném proudu.",
-        "Téma ho opravdu zajímá.",
+        {"m": "Rozhovor je v plném proudu.", "f": "Rozhovor je v plném proudu."},
+        {"m": "Téma ho opravdu zajímá.", "f": "Téma ji opravdu zajímá."},
     ],
     "peak_conflict": [
-        "Cítí napětí v rozhovoru.",
-        "Nesouhlasí s názorem druhého.",
+        {"m": "Cítí napětí v rozhovoru.", "f": "Cítí napětí v rozhovoru."},
+        {"m": "Nesouhlasí s názorem druhého.", "f": "Nesouhlasí s názorem druhého."},
     ],
     "closing": [
-        "Pomalu směřuje k rozloučení.",
-        "Cítí, že je čas jít.",
-        "Chce rozhovor hezky uzavřít.",
+        {"m": "Pomalu směřuje k rozloučení.", "f": "Pomalu směřuje k rozloučení."},
+        {"m": "Cítí, že je čas jít.", "f": "Cítí, že je čas jít."},
+        {"m": "Chce rozhovor hezky uzavřít.", "f": "Chce rozhovor hezky uzavřít."},
     ],
 }
 
@@ -74,27 +74,45 @@ TRAJECTORY_LENGTHS = {
     "quiet": (5, 10),       # tichý - pár replik, ale ne 3
 }
 
-# Matice kompatibility archetypů (id_a, id_b) -> tendence
-# Hodnoty: (šance_casual, šance_deep, šance_conflict, šance_quiet)
-ARCHETYPE_COMPATIBILITY = {
-    # Babička s ostatními
-    ("babicka_vlasta", "manazer_petr"): (0.5, 0.3, 0.1, 0.1),
-    ("babicka_vlasta", "rebelka_adela"): (0.3, 0.3, 0.2, 0.2),
-    ("babicka_vlasta", "delnik_franta"): (0.6, 0.2, 0.0, 0.2),
-    ("babicka_vlasta", "bezdomovec_lojza"): (0.4, 0.4, 0.0, 0.2),
+def _compute_compatibility(npc_a: dict, npc_b: dict) -> tuple:
+    """
+    Dynamicky vypočítá kompatibilitu dvou NPC z jejich povah.
 
-    # Manažer s ostatními
-    ("manazer_petr", "rebelka_adela"): (0.2, 0.2, 0.4, 0.2),
-    ("manazer_petr", "delnik_franta"): (0.4, 0.2, 0.2, 0.2),
-    ("manazer_petr", "bezdomovec_lojza"): (0.3, 0.3, 0.2, 0.2),
+    Returns:
+        (šance_casual, šance_deep, šance_conflict, šance_quiet)
+    """
+    # Získej povahy (default hodnoty pokud chybí)
+    povaha_a = npc_a.get("povaha", {})
+    povaha_b = npc_b.get("povaha", {})
 
-    # Rebelka s ostatními
-    ("rebelka_adela", "delnik_franta"): (0.3, 0.2, 0.2, 0.3),
-    ("rebelka_adela", "bezdomovec_lojza"): (0.2, 0.4, 0.1, 0.3),
+    konfl_a = povaha_a.get("konfliktnost", 0.2)
+    konfl_b = povaha_b.get("konfliktnost", 0.2)
+    hloub_a = povaha_a.get("hloubavost", 0.3)
+    hloub_b = povaha_b.get("hloubavost", 0.3)
+    mluv_a = povaha_a.get("mluvnost", 0.5)
+    mluv_b = povaha_b.get("mluvnost", 0.5)
 
-    # Dělník s bezdomovcem
-    ("delnik_franta", "bezdomovec_lojza"): (0.5, 0.3, 0.0, 0.2),
-}
+    # Průměry
+    konfliktnost = (konfl_a + konfl_b) / 2
+    hloubavost = (hloub_a + hloub_b) / 2
+    mluvnost = (mluv_a + mluv_b) / 2
+
+    # Výpočet šancí
+    # Konflikt: vyšší konfliktnost obou = vyšší šance
+    conflict = konfliktnost * 0.8
+
+    # Deep: vyšší hloubavost = hlubší rozhovory
+    deep = hloubavost * 0.6
+
+    # Quiet: nízká mluvnost = tišší rozhovor
+    quiet = (1 - mluvnost) * 0.5
+
+    # Casual: zbytek
+    casual = max(0.2, 1.0 - conflict - deep - quiet)
+
+    # Normalizace
+    total = casual + deep + conflict + quiet
+    return (casual / total, deep / total, conflict / total, quiet / total)
 
 # Automatické události
 AUTO_EVENTS_IMPULSE = [
@@ -160,17 +178,9 @@ class Director:
     def _determine_trajectory(
         self, npc_a: dict, npc_b: dict, relationship=None
     ) -> str:
-        """Určí trajektorii scény podle archetypů a vztahu."""
-        id_a = npc_a.get("id", "")
-        id_b = npc_b.get("id", "")
-
-        # Hledej v matici (oba směry)
-        weights = ARCHETYPE_COMPATIBILITY.get((id_a, id_b))
-        if not weights:
-            weights = ARCHETYPE_COMPATIBILITY.get((id_b, id_a))
-        if not weights:
-            # Default
-            weights = (0.4, 0.3, 0.15, 0.15)
+        """Určí trajektorii scény podle povah NPC a vztahu."""
+        # Dynamicky vypočítej kompatibilitu z povah NPC
+        weights = _compute_compatibility(npc_a, npc_b)
 
         # Úprava podle vztahu
         if relationship:
@@ -296,11 +306,19 @@ class Director:
 
         # Speciální intent pro konflikt
         if phase == "peak" and self.state.trajectory == "conflict":
-            intents = PHASE_INTENTS.get("peak_conflict", [""])
+            intents = PHASE_INTENTS.get("peak_conflict", [{"m": "", "f": ""}])
         else:
-            intents = PHASE_INTENTS.get(phase, [""])
+            intents = PHASE_INTENTS.get(phase, [{"m": "", "f": ""}])
 
-        intent = random.choice(intents)
+        intent_dict = random.choice(intents)
+
+        # Vyber variantu podle rodu NPC
+        rod = npc.get("rod", "muž")
+        if rod == "žena":
+            intent = intent_dict.get("f", intent_dict.get("m", ""))
+        else:
+            intent = intent_dict.get("m", "")
+
         if intent:
             self._logger.log_director("INTENT", f"{npc.get('role')}: \"{intent}\"")
         return intent
@@ -405,6 +423,10 @@ class Director:
             # Analýza události a NPC
             event_lower = event.lower()
 
+            # Získej povahu NPC pro dynamickou reakci
+            povaha = npc.get("povaha", {})
+            konfliktnost = povaha.get("konfliktnost", 0.2)
+
             # Hrubost/konflikt - reaguje ten koho se to týká
             if "hrub" in event_lower or "nadáv" in event_lower or "křič" in event_lower:
                 if npc_id in event_lower or role.lower() in event_lower:
@@ -412,13 +434,11 @@ class Director:
                     reaction_type = "speech"
                     instruction = f"Buď hrubý a nepříjemný. {event}"
                 else:
-                    # Ostatní reagují na hrubost
-                    if "rebelka" in npc_id:
+                    # Reakce závisí na konfliktnosti
+                    if konfliktnost > 0.4:
                         instruction = "Reaguj podrážděně nebo ironicky na hrubé chování."
-                    elif "babicka" in npc_id:
-                        instruction = "Buď překvapená a trochu zraněná hrubostí."
-                    elif "manazer" in npc_id:
-                        instruction = "Reaguj věcně ale nelibě na nevhodné chování."
+                    elif konfliktnost < 0.2:
+                        instruction = "Buď překvapený/á a trochu zraněný/á hrubostí."
                     else:
                         instruction = "Reaguj přirozeně na hrubé chování vedle tebe."
 
@@ -428,12 +448,8 @@ class Director:
                     reaction_type = "speech"
                     instruction = f"Právě piješ. {event}"
                 else:
-                    # Reakce ostatních
-                    if "babicka" in npc_id:
-                        instruction = "Všimla sis že vedle tebe někdo pije. Můžeš to komentovat."
-                    else:
-                        should_react = random.random() < 0.5  # 50% šance reagovat
-                        instruction = "Všiml sis pití vedle sebe."
+                    should_react = random.random() < 0.5
+                    instruction = "Všiml/a sis pití vedle sebe. Můžeš to komentovat."
 
             # Přírodní události (racek, vítr, etc.)
             elif any(w in event_lower for w in ["racek", "vítr", "list", "kočka", "pes"]):

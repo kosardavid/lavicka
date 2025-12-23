@@ -8,53 +8,8 @@
 - **Persistentní paměť** - NPC si pamatují předchozí rozhovory
 - **Dynamické vztahy** - vztahy se vyvíjejí na základě kvality interakcí
 - **Director systém** - řídí tok a dramaturgii scén
+- **Plně dynamické NPC** - žádný hardcoded kód pro konkrétní postavy
 - **Lokální LLM** - běží na LM Studio (Qwen 2.5 nebo jiný model)
-
----
-
-## Struktura projektu
-
-```
-lavicka/
-├── run.py                    # Vstupní bod - spouští hru
-├── ai_log.txt                # Log AI komunikace
-│
-├── game/
-│   ├── app.py                # Hlavní orchestrace (LavickaApp)
-│   ├── main.py               # Pygame smyčka + klávesové zkratky
-│   ├── settings.py           # Konfigurace a konstanty
-│   │
-│   ├── npc/                  # Modul postav
-│   │   ├── base.py           # Třída NPC
-│   │   └── archetypes.py     # Načítání postav z JSON
-│   │
-│   ├── rules/                # Herní logika
-│   │   ├── director.py       # Režisér scény
-│   │   ├── relationships.py  # Správce vztahů
-│   │   └── events.py         # Události prostředí
-│   │
-│   ├── ai/                   # AI komunikace
-│   │   ├── client.py         # API wrapper pro LLM
-│   │   ├── prompts.py        # Šablony promptů
-│   │   ├── parser.py         # Parser odpovědí
-│   │   └── logger.py         # Logování
-│   │
-│   ├── ui/                   # Pygame vykreslování
-│   │   ├── renderer.py       # Scéna, lavička, NPC
-│   │   ├── chat.py           # Chat panel
-│   │   └── input_box.py      # Vstup pro události
-│   │
-│   ├── memory/               # Paměťový systém
-│   │   └── pamet.py          # Persistentní paměť NPC
-│   │
-│   ├── utils/                # Pomocné funkce
-│   │   └── helpers.py        # safe_print, strip_non_latin
-│   │
-│   └── data/                 # Datové soubory
-│       ├── postavy.json      # Definice 5 archetypů
-│       ├── pameti.json       # Paměť NPC (persistentní)
-│       └── vztahy.json       # Vztahy mezi NPC
-```
 
 ---
 
@@ -121,6 +76,52 @@ _zpracuj_odpoved()
 
 ---
 
+## Struktura projektu
+
+```
+lavicka/
+├── run.py                    # Vstupní bod - spouští hru
+├── ai_log.txt                # Log AI komunikace
+│
+├── game/
+│   ├── app.py                # Hlavní orchestrace (LavickaApp)
+│   ├── main.py               # Pygame smyčka + klávesové zkratky
+│   ├── settings.py           # Konfigurace a konstanty
+│   │
+│   ├── npc/                  # Modul postav
+│   │   ├── base.py           # Třída NPC
+│   │   └── archetypes.py     # Načítání postav z JSON
+│   │
+│   ├── rules/                # Herní logika
+│   │   ├── director.py       # Režisér scény
+│   │   ├── relationships.py  # Správce vztahů
+│   │   └── events.py         # Události prostředí
+│   │
+│   ├── ai/                   # AI komunikace
+│   │   ├── client.py         # API wrapper pro LLM
+│   │   ├── prompts.py        # Šablony promptů
+│   │   ├── parser.py         # Parser odpovědí
+│   │   └── logger.py         # Logování
+│   │
+│   ├── ui/                   # Pygame vykreslování
+│   │   ├── renderer.py       # Scéna, lavička, NPC
+│   │   ├── chat.py           # Chat panel
+│   │   └── input_box.py      # Vstup pro události
+│   │
+│   ├── memory/               # Paměťový systém
+│   │   └── pamet.py          # Persistentní paměť NPC
+│   │
+│   ├── utils/                # Pomocné funkce
+│   │   └── helpers.py        # safe_print, strip_non_latin, pair_key
+│   │
+│   └── data/                 # Datové soubory
+│       ├── postavy.json      # Definice NPC postav
+│       ├── pameti.json       # Paměť NPC (persistentní)
+│       └── vztahy.json       # Vztahy mezi NPC
+```
+
+---
+
 ## Hlavní komponenty
 
 ### 1. LavickaApp (app.py)
@@ -143,30 +144,147 @@ class LavickaApp:
 - `vykresli()` - vykreslí celou scénu
 - `add_environment_event(text)` - přidá událost prostředí
 
-### 2. Director (rules/director.py)
+---
 
-Režisér který řídí dramaturgii scény.
+### 2. NPC Definice (data/postavy.json)
 
-**Trajektorie scény:**
+Každá postava je definována v JSON s těmito atributy:
+
+```json
+{
+  "babicka_vlasta": {
+    "id": "babicka_vlasta",
+    "jmeno": "Vlasta",
+    "prijmeni": "Nováková",
+    "titul": "Babička",
+    "role": "Babička Vlasta",
+    "vek": 75,
+    "color": [200, 200, 200],
+    "vibe": "Milá, užívá si klid a vzpomíná na mládí. Mluví jemně a občas nostalgicky.",
+    "popis": "Starší paní v šátku",
+    "rod": "žena",
+    "temata": ["vzpomínky na mládí", "rodina a vnoučata", "zdraví", "vaření a recepty"],
+    "povaha": {
+      "konfliktnost": 0.1,
+      "hloubavost": 0.5,
+      "mluvnost": 0.6
+    }
+  }
+}
+```
+
+#### Povinné atributy
+
+| Atribut | Typ | Popis |
+|---------|-----|-------|
+| `id` | string | Unikátní identifikátor |
+| `jmeno` | string | Křestní jméno |
+| `prijmeni` | string | Příjmení |
+| `titul` | string | Titul/označení (Babička, Manažer...) |
+| `role` | string | Zobrazované jméno |
+| `vek` | int | Věk postavy |
+| `color` | [r,g,b] | Barva pro UI |
+| `vibe` | string | Popis osobnosti pro AI |
+| `popis` | string | Krátký popis vzhledu |
+| `rod` | "muž"/"žena" | Pro správné skloňování |
+| `temata` | string[] | Seznam zájmových témat |
+| `povaha` | object | Osobnostní rysy |
+
+#### Povaha (osobnostní rysy)
+
+| Rys | Rozsah | Popis | Vliv |
+|-----|--------|-------|------|
+| `konfliktnost` | 0.0-1.0 | Tendence ke konfliktům | Vyšší = více konfliktních scén |
+| `hloubavost` | 0.0-1.0 | Tendence k hlubokým rozhovorům | Vyšší = delší, hlubší rozhovory |
+| `mluvnost` | 0.0-1.0 | Jak moc mluví | Nižší = více ticha |
+
+#### Témata
+
+Pole `temata` obsahuje zájmy postavy. Při rozhovoru dvou NPC se náhodně kombinují témata obou a nabízí se AI jako inspirace.
+
+Příklad: Babička (`["vzpomínky", "rodina"]`) + Dělník (`["fotbal", "pivo"]`) → AI dostane mix: "Možná témata: rodina, fotbal, vzpomínky"
+
+---
+
+### 3. Director (rules/director.py)
+
+Režisér který řídí dramaturgii scény dynamicky na základě osobností NPC.
+
+#### Trajektorie scény
+
 | Typ | Délka (replik) | Popis |
 |-----|----------------|-------|
-| casual | 8-16 | Běžný rozhovor |
-| deep | 14-25 | Hluboký rozhovor |
-| conflict | 6-12 | Konfliktní scéna |
-| quiet | 5-10 | Tiché setkání |
+| `casual` | 8-16 | Běžný rozhovor |
+| `deep` | 14-25 | Hluboký rozhovor |
+| `conflict` | 6-12 | Konfliktní scéna |
+| `quiet` | 5-10 | Tiché setkání |
 
-**Fáze scény:**
-1. `intro` - NPC přišlo, oťukává situaci
-2. `developing` - rozhovor se rozvíjí
-3. `peak` - vrchol (dramatický moment)
-4. `closing` - ukončování
+#### Dynamický výpočet trajektorie
 
-**Intenty** - Director dává NPC cíle:
-- "Váhá, jestli začít rozhovor."
-- "Rozhovor plyne přirozeně."
-- "Chce rozhovor hezky uzavřít."
+Trajektorie se počítá z `povaha` atributů obou NPC:
 
-### 3. RelationshipManager (rules/relationships.py)
+```python
+def _compute_compatibility(npc_a: dict, npc_b: dict) -> tuple:
+    """Vrací (casual, deep, conflict, quiet) váhy."""
+
+    # Průměry povah obou NPC
+    konfliktnost = (npc_a.povaha.konfliktnost + npc_b.povaha.konfliktnost) / 2
+    hloubavost = (npc_a.povaha.hloubavost + npc_b.povaha.hloubavost) / 2
+    mluvnost = (npc_a.povaha.mluvnost + npc_b.povaha.mluvnost) / 2
+
+    # Výpočet šancí
+    conflict = konfliktnost * 0.8
+    deep = hloubavost * 0.6
+    quiet = (1 - mluvnost) * 0.5
+    casual = max(0.2, 1.0 - conflict - deep - quiet)
+
+    # Normalizace na součet 1.0
+    return normalize(casual, deep, conflict, quiet)
+```
+
+#### Fáze scény
+
+| Fáze | Popis | Typický intent |
+|------|-------|----------------|
+| `intro` | Začátek, oťukávání | "Právě přišel, oťukává situaci" |
+| `developing` | Rozvoj tématu | volný průběh |
+| `peak` | Vrchol rozhovoru | "Rozhovor je v plném proudu" |
+| `closing` | Směřování k závěru | "Pomalu směřuje k rozloučení" |
+
+#### Intenty
+
+Director dává NPC "cíle" které ovlivňují jejich chování. Intenty jsou rozděleny podle rodu (muž/žena) pro správné skloňování:
+
+```python
+PHASE_INTENTS = {
+    "intro": [
+        {"m": "Právě přišel, oťukává situaci.", "f": "Právě přišla, oťukává situaci."},
+        {"m": "Zkoumá, kdo vedle něj sedí.", "f": "Zkoumá, kdo vedle ní sedí."},
+    ],
+    "peak_conflict": [
+        {"m": "Cítí napětí v rozhovoru.", "f": "Cítí napětí v rozhovoru."},
+        {"m": "Nesouhlasí s názorem druhého.", "f": "Nesouhlasí s názorem druhého."},
+    ],
+    ...
+}
+```
+
+#### Reakce na události
+
+Reakce na události (hrubost, pití, přírodní jevy) jsou také dynamické podle `konfliktnost`:
+
+```python
+if konfliktnost > 0.4:
+    instruction = "Reaguj podrážděně nebo ironicky."
+elif konfliktnost < 0.2:
+    instruction = "Buď překvapený/á a trochu zraněný/á."
+else:
+    instruction = "Reaguj přirozeně."
+```
+
+---
+
+### 4. RelationshipManager (rules/relationships.py)
 
 Spravuje vztahy mezi NPC v rámci session.
 
@@ -175,22 +293,57 @@ class Relationship:
     familiarity: float = 0      # 0-25, jak dobře se znají
     sympathy: float = 0         # -1 až +1
     tykani: bool = False        # zda si tykají
+    name_exchange: bool = False # zda si řekli jména
+    pending_tykani: dict = None # probíhající návrh tykání
 ```
 
-**Pravidla oslovování:**
-- Při vykání: "MUSÍTE VYKAT. NIKDY NETYKEJ! Nepoužívej křestní jména."
-- Při tykání: "Můžete TYKAT. Oslovuj křestním jménem."
+#### Pravidla oslovování
 
-### 4. Paměť (memory/pamet.py)
+**Vykání (striktní):**
+```
+!!! VYKÁNÍ - STRIKTNÍ PRAVIDLO !!!
+Používej POUZE tvary: vy, vás, vám, váš, vaše.
+ZAKÁZÁNO: ty, tě, ti, tobě, tvůj, tvoje.
+Neříkej jméno - jen "pane/paní" nebo neoslovuj vůbec.
+Příklad správně: "Jak se máte?" "Co děláte?" "Líbí se vám tu?"
+Příklad ŠPATNĚ: "Jak se máš?" "Co děláš?" "Líbí se ti tu?"
+```
+
+**Tykání:**
+```
+Tykáte si (ty/tobě/tebe). Oslovuj křestním jménem.
+```
+
+#### Dynamická témata
+
+```python
+def get_topic_suggestions(self, npc_a, npc_b) -> str:
+    """Kombinuje témata obou NPC."""
+    temata_a = npc_a.get("temata", [])
+    temata_b = npc_b.get("temata", [])
+
+    # Vyber 1-2 od každého
+    selected = random.sample(temata_a, min(2, len(temata_a)))
+    selected += random.sample(temata_b, min(2, len(temata_b)))
+
+    # Zamíchej a vyber max 3
+    random.shuffle(selected)
+    return "Možná témata: " + ", ".join(selected[:3])
+```
+
+---
+
+### 5. Paměť (memory/pamet.py)
 
 Persistentní paměť NPC uložená v JSON.
 
-**Struktura vzpomínky:**
+#### Struktura vzpomínky
+
 ```python
 {
     "id": "delnik_franta",
     "popis": "Chlap v montérkách",
-    "jmeno": "Franta",           # pouze při tykání
+    "jmeno": "Franta",           # pouze pokud zaznělo v rozhovoru
     "dojem": "Přátelský člověk",
     "temata": ["počasí", "práce"],
     "fakta": ["Pracuje na stavbě"],
@@ -199,20 +352,25 @@ Persistentní paměť NPC uložená v JSON.
 }
 ```
 
-**Rozpoznání podle síly:**
-| Síla | Rozpoznání |
-|------|------------|
-| > 0.7 | poznam_dobre |
-| > 0.5 | poznam |
-| > 0.3 | povedome |
-| > 0.1 | nejasne |
-| ≤ 0.1 | neznam |
+#### Rozpoznání podle síly
 
-**Decay (zapomínání):**
+| Síla | Úroveň | Příklad reakce |
+|------|--------|----------------|
+| > 0.7 | poznam_dobre | "Ahoj Vlastičko!" |
+| > 0.5 | poznam | "Vy jste ta paní co tu byla minule" |
+| > 0.3 | povedome | "Vy mi někoho připomínáte..." |
+| > 0.1 | nejasne | Vágní pocit známosti |
+| ≤ 0.1 | neznam | "Dobrý den" (cizinec) |
+
+#### Decay (zapomínání)
+
 - Faktor: 0.98 za den
 - Minimum: 0.05 (pod tím se vzpomínka smaže)
+- Silné emoce = pomalejší zapomínání
 
-### 5. Fáze vztahů
+---
+
+### 6. Fáze vztahů
 
 Vztahy mezi NPC procházejí fázemi:
 
@@ -230,30 +388,6 @@ Fáze se vypočítává automaticky podle:
 
 ---
 
-## NPC Archetypy
-
-### Definice (data/postavy.json)
-
-| ID | Role | Popis | Osobnost |
-|----|------|-------|----------|
-| babicka_vlasta | Babička Vlasta | Starší paní v šátku | Milá, nostalgická |
-| manazer_petr | Manažer Petr | Muž v obleku | Uspěchaný, věcný |
-| rebelka_adela | Rebelka Adéla | Mladá s barevnými vlasy | Ironická, stručná |
-| delnik_franta | Dělník Franta | Chlap v montérkách | Bodrý, přímý |
-| bezdomovec_lojza | Bezdomovec Lojza | Starší muž s plnovousem | Filosof, pomalý |
-
-### Kompatibilita archetypů
-
-Matice určuje tendenci k typu rozhovoru:
-
-```
-(babicka, franta)  → 60% casual, 20% deep, 5% conflict, 15% quiet
-(rebelka, manazer) → 20% casual, 15% deep, 45% conflict, 20% quiet
-(lojza, franta)    → 40% casual, 30% deep, 5% conflict, 25% quiet
-```
-
----
-
 ## AI Systém
 
 ### Prompt struktura
@@ -262,6 +396,7 @@ Matice určuje tendenci k typu rozhovoru:
 IDENTITY_LOCK (ochrana role)
 
 Jsi {role}. {vibe}
+Tvoje skutečné jméno je {jmeno}.
 {rod_instrukce}
 Místo: lavička u moře.
 
@@ -275,10 +410,14 @@ Emoce: {emotion} (intenzita {intensity}%), nálada {mood}
 
 Stav vztahu: familiarity={X}, sympatie={Y}, tykání={ANO/NE}
 
-Pravidla:
-- {addressing_rule}
-- {pacing_rule}
+{addressing_rule}   ← striktní pravidla vykání/tykání
+{pacing_rule}       ← pravidla tempa podle familiarity
+{topic_suggestions} ← dynamicky generovaná témata
+
+Další pravidla:
 - Buď krátký: 1-2 věty, max 170 znaků.
+- Neopakuj stejné otázky.
+- Neodpovídej otázkou na otázku.
 
 ROZHOVOR:
 {posledních 8 replik}
@@ -318,15 +457,50 @@ Automaticky se odstraňují:
 
 ### Automatické události (Director)
 
-Ve fázi `developing`:
-- "Racek prolétl kolem lavičky"
-- "Vítr zesílil"
-- "Ozvalo se vzdálené houkání lodi"
+```python
+AUTO_EVENTS_IMPULSE = [
+    "Kolem proletěl racek.",
+    "Od moře zafoukal vítr.",
+    "Někde v dálce zahoukal parník.",
+    "Na lavičku dopadl list.",
+    "Přeběhla kolem kočka.",
+]
+```
 
-Ve fázi `peak` (dramatické):
-- "Začíná mrholit"
-- "Kolem proběhl pes"
-- "V dálce se blýsklo"
+---
+
+## Přidání nové postavy
+
+Stačí přidat záznam do `game/data/postavy.json`:
+
+```json
+{
+  "nova_postava": {
+    "id": "nova_postava",
+    "jmeno": "Jan",
+    "prijmeni": "Novák",
+    "titul": "Učitel",
+    "role": "Učitel Jan",
+    "vek": 45,
+    "color": [100, 100, 200],
+    "vibe": "Klidný, trpělivý, rád vysvětluje. Mluví srozumitelně.",
+    "popis": "Muž středního věku s brýlemi",
+    "rod": "muž",
+    "temata": ["vzdělávání", "knihy", "historie", "děti", "trpělivost"],
+    "povaha": {
+      "konfliktnost": 0.15,
+      "hloubavost": 0.7,
+      "mluvnost": 0.6
+    }
+  }
+}
+```
+
+**Žádný Python kód není potřeba měnit.** Postava se automaticky:
+- Načte při startu hry
+- Získá dynamicky vypočítané trajektorie s ostatními
+- Dostane náhodná témata z kombinace svých a partnerových
+- Reaguje podle své `konfliktnost` na události
 
 ---
 
@@ -373,7 +547,7 @@ TICHO_SAM = 0.88  # šance že NPC sám mlčí
 ## Datové soubory
 
 ### postavy.json
-Definice archetypů NPC (id, role, vibe, popis, rod, color).
+Definice všech NPC postav včetně osobnosti, témat a povahových rysů.
 
 ### pameti.json
 Persistentní paměť všech NPC - kdo koho zná, dojmy, témata, fakta.
@@ -404,23 +578,44 @@ python run.py
 
 ---
 
+## Designové principy
+
+### 1. Žádný hardcoded kód pro konkrétní NPC
+
+Veškerá logika je **dynamická**:
+- Trajektorie se počítají z `povaha` atributů
+- Témata se kombinují z `temata` obou NPC
+- Reakce na události závisí na `konfliktnost`
+- Intenty jsou parametrizované podle `rod`
+
+### 2. Data-driven design
+
+Nové postavy = jen editace JSON souboru. Žádné změny kódu.
+
+### 3. Adaptivní Director
+
+Director **nenutí**, jen **navádí**:
+- Sleduje průběh rozhovoru
+- Dává jemné hinty v intentech
+- Adaptuje se na vývoj
+- Ukončuje scény přirozeně
+
+---
+
 ## Známé limitace
 
-1. **RelationshipManager není persistentní** - familiarity se resetuje po restartu (sympatie a fáze se synchronizují do vztahy.json)
+1. **Lokální model může ignorovat instrukce** - menší modely (Qwen 2.5) občas ignorují pravidla vykání
 
-2. **Lokální model může ignorovat instrukce** - menší modely (Qwen 2.5) občas ignorují pravidla vykání
+2. **Thread-safety** - sdílené proměnné nejsou vždy chráněny lockem
 
-3. **Thread-safety** - sdílené proměnné nejsou vždy chráněny lockem
-
-4. **Fyzické reakce** - všechny NPC mají stejné fyzické reakce, neliší se podle osobnosti
+3. **Fyzické reakce** - všechny NPC mají stejné fyzické reakce
 
 ---
 
 ## Budoucí vylepšení
 
-- [ ] Persistentní RelationshipManager
 - [ ] Více archetypů postav
 - [ ] Denní/noční cyklus
 - [ ] Zvukové efekty
-- [ ] Více lavičku (více scén současně)
+- [ ] Více laviček (více scén současně)
 - [ ] Web interface místo pygame

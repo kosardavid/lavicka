@@ -244,9 +244,49 @@ class RelationshipManager:
         vztah = self.get(npc_a, npc_b)
 
         if vztah.tykani:
-            return "Můžete TYKAT (ty/tobě/tebe). Oslovuj křestním jménem."
+            return "Tykáte si (ty/tobě/tebe). Oslovuj křestním jménem."
         else:
-            return "MUSÍTE VYKAT (vy/vás/vám). NIKDY NETYKEJ! Nepoužívej křestní jména - řekni 'pane/paní' nebo vůbec neoslovuj."
+            return """!!! VYKÁNÍ - STRIKTNÍ PRAVIDLO !!!
+Používej POUZE tvary: vy, vás, vám, váš, vaše.
+ZAKÁZÁNO: ty, tě, ti, tobě, tvůj, tvoje.
+Neříkej jméno - jen "pane/paní" nebo neoslovuj vůbec.
+Příklad správně: "Jak se máte?" "Co děláte?" "Líbí se vám tu?"
+Příklad ŠPATNĚ: "Jak se máš?" "Co děláš?" "Líbí se ti tu?\""""
+
+    def get_topic_suggestions(self, npc_a, npc_b) -> str:
+        """
+        Vrátí návrhy témat kombinací zájmů obou NPC.
+
+        Témata jsou definována u každého NPC v postavy.json.
+        Director vybere náhodně z obou seznamů.
+        """
+        import random
+
+        # Získej témata obou NPC
+        temata_a = []
+        temata_b = []
+
+        if isinstance(npc_a, dict):
+            temata_a = npc_a.get("temata", [])
+        if isinstance(npc_b, dict):
+            temata_b = npc_b.get("temata", [])
+
+        # Kombinuj - vyber 1-2 od každého
+        selected = []
+        if temata_a:
+            selected.extend(random.sample(temata_a, min(2, len(temata_a))))
+        if temata_b:
+            selected.extend(random.sample(temata_b, min(2, len(temata_b))))
+
+        # Fallback
+        if not selected:
+            selected = ["počasí", "moře", "co dělají v životě"]
+
+        # Zamíchej a vyber max 3
+        random.shuffle(selected)
+        selected = selected[:3]
+
+        return "Možná témata (jen inspirace): " + ", ".join(selected) + "."
 
     def get_silence_chance(self, npc_a, npc_b) -> float:
         """

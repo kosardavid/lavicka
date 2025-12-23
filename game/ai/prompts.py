@@ -168,15 +168,49 @@ Nedávné události:
 {event_context}
 """
 
-        # Relationship rules
+        # Relationship rules - jen pokud máme souseda
         pacing = relationship_rules.get("pacing", "")
         addressing = relationship_rules.get("addressing", "")
+        topics = relationship_rules.get("topics", "")
         familiarity = relationship_rules.get("familiarity", 0)
         sympathy = relationship_rules.get("sympathy", 0)
         tykani = relationship_rules.get("tykani", False)
 
+        # Blok o vztahu - jen pokud máme nějaká pravidla (= je soused)
+        relationship_block = ""
+        if addressing or pacing:
+            relationship_block = f"""
+=== CO VÍŠ O ČLOVĚKU VEDLE ===
+{memory_context if memory_context else "(Nic - je to cizinec)"}
+
+Stav vztahu: familiarity={familiarity:.1f}, sympatie={sympathy:+.2f}, tykání={"ANO" if tykani else "NE"}
+
+{addressing}
+
+{pacing}
+
+{topics}
+
+Další pravidla:
+- Buď krátký: 1-2 věty, max 170 znaků.
+- Neopakuj stejné otázky.
+- Neodpovídej otázkou na otázku - reaguj na to co řekl, pak teprve případně se ptej.
+- Žádná meta řeč o AI.
+"""
+        else:
+            # NPC je samo
+            relationship_block = """
+Jsi na lavičce sám/sama. Můžeš přemýšlet, pozorovat moře, nebo si užívat klid.
+"""
+
+        # Sestavení identity - použij jméno pokud má přezdívku
+        jmeno_pro_roli = npc.get('prezdivka') or npc.get('jmeno', '')
+        titul = npc.get('titul', '')
+        identita = f"{titul} {jmeno_pro_roli}".strip() if titul else jmeno_pro_roli
+
         return f"""{IDENTITY_LOCK}
-Jsi {npc['role']}. {npc['vibe']}
+Jsi {identita}. {npc['vibe']}
+Tvoje skutečné jméno je {npc.get('jmeno', jmeno_pro_roli)}{f" ({npc.get('prezdivka')})" if npc.get('prezdivka') else ""}.
 {rod_instrukce(npc)}
 Místo: lavička u moře.
 
@@ -184,20 +218,7 @@ Místo: lavička u moře.
 {intent_block}
 {forced_block}
 {env_block}
-
-=== CO VÍŠ O ČLOVĚKU VEDLE ===
-{memory_context if memory_context else "(Nic - je to cizinec)"}
-
-Stav vztahu: familiarity={familiarity:.1f}, sympatie={sympathy:+.2f}, tykání={"ANO" if tykani else "NE"}
-
-Pravidla:
-- {addressing}
-- {pacing}
-- Buď krátký: 1-2 věty, max 170 znaků.
-- Neopakuj stejné otázky.
-- Neodpovídej otázkou na otázku.
-- Žádná meta řeč o AI.
-
+{relationship_block}
 Výstup POUZE validní JSON.
 JAZYK: Pouze česky.
 """
@@ -229,16 +250,18 @@ PARTNER: {partner_popis}
 Odpověz POUZE tímto JSON formátem:
 {{
     "popis": "jak partner vypadá (max 10 slov)",
-    "jmeno": "jméno pokud zaznělo, jinak null",
+    "jmeno": "křestní jméno POUZE pokud ho partner EXPLICITNĚ řekl (např. 'Jmenuji se Jana'), jinak null",
     "dojem": "celkový dojem z člověka (max 15 slov)",
     "temata": ["téma1", "téma2", "téma3"],
     "fakta": ["co ses dozvěděl 1", "co ses dozvěděl 2"],
     "emoce_intenzita": 0.5
 }}
 
-Pravidla:
-- Neopisuj rozhovor doslova
-- Zapiš jen to důležité co by sis zapamatoval
+DŮLEŽITÉ pravidla:
+- "jmeno" je POUZE křestní jméno které partner ŘEKL v rozhovoru (např. "Jsem Petr", "Říkejte mi Jana")
+- NIKDY nepoužívej označení jako "Rebelka Adéla" nebo "Dělník Franta" - to NENÍ jméno!
+- Pokud jméno nezaznělo, MUSÍ být null
+- Neopisuj rozhovor doslova, zapiš jen to důležité
 - emoce_intenzita: 0.3 = nudný rozhovor, 0.5 = normální, 0.8 = silný zážitek
 """
 

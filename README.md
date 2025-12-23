@@ -4,12 +4,21 @@ Simulace rozhovorů mezi NPC postavami sedícími na lavičce u moře. Hra použ
 
 NPC si pamatují lidi se kterými mluvili - ne doslovně, ale jako skutečný člověk (shrnutí, dojmy, fakta).
 
-## Struktura projektu (Modulární v2.0)
+## Klíčové vlastnosti
+
+- **Persistentní paměť** - NPC si pamatují předchozí rozhovory
+- **Dynamické vztahy** - vztahy se vyvíjejí na základě kvality interakcí
+- **Director systém** - režisér řídí dramaturgii scén
+- **Dynamické postavy** - nové NPC lze přidat pouze editací JSON souboru
+- **Lokální LLM** - běží na LM Studio (Qwen 2.5 nebo jiný model)
+
+## Struktura projektu
 
 ```
 lavicka/
 ├── run.py                 # Spouštěcí skript
 ├── README.md              # Tato dokumentace
+├── DOCS.md                # Podrobná technická dokumentace
 │
 └── game/                  # Hlavní herní modul
     ├── __init__.py
@@ -18,37 +27,35 @@ lavicka/
     ├── settings.py        # Konfigurace a konstanty
     │
     ├── npc/               # Modul pro NPC postavy
-    │   ├── __init__.py
     │   ├── base.py        # Třída NPC
-    │   └── archetypes.py  # Definice postav (Babička, Manažer, ...)
+    │   └── archetypes.py  # Načítání postav z JSON
     │
     ├── rules/             # Herní pravidla
-    │   ├── __init__.py
+    │   ├── director.py    # Režisér scény
     │   ├── relationships.py  # Vztahy mezi NPC
     │   └── events.py      # Události prostředí
     │
     ├── ai/                # Komunikace s AI
-    │   ├── __init__.py
     │   ├── client.py      # OpenAI API klient
     │   ├── parser.py      # Parsování odpovědí
-    │   └── prompts.py     # Šablony promptů
+    │   ├── prompts.py     # Šablony promptů
+    │   └── logger.py      # AI logování
     │
     ├── ui/                # Uživatelské rozhraní
-    │   ├── __init__.py
     │   ├── renderer.py    # Vykreslování scény
     │   ├── chat.py        # Chat panel
     │   └── input_box.py   # Vstupní pole
     │
     ├── memory/            # Systém paměti NPC
-    │   ├── __init__.py
     │   └── pamet.py       # Persistentní paměť
     │
     ├── utils/             # Pomocné funkce
-    │   ├── __init__.py
     │   └── helpers.py     # Utility funkce
     │
-    └── data/              # Data hry (automaticky vytvořeno)
-        └── memories.json  # Uložená paměť NPC
+    └── data/              # Data hry
+        ├── postavy.json   # Definice NPC postav
+        ├── pameti.json    # Uložená paměť NPC
+        └── vztahy.json    # Vztahy mezi NPC
 ```
 
 ## Požadavky
@@ -93,100 +100,117 @@ python -m game.main
 | **PgUp/PgDn** | Scrollování chatu |
 | **Home/End** | Skok na začátek/konec chatu |
 
-## Moduly
+## NPC Postavy
 
-### npc/
-Definuje NPC postavy a jejich archetypy. Každá postava má:
-- **id**: Unikátní identifikátor
-- **role**: Zobrazované jméno
-- **vibe**: Osobnost pro AI prompt
-- **popis**: Krátký popis vzhledu
-- **rod**: Pro správné skloňování v češtině
+Postavy jsou definovány v `game/data/postavy.json`. Každá postava má:
 
-### rules/
-Obsahuje herní pravidla:
-- **RelationshipManager**: Sleduje vztahy (familiarity, sympathy, tykání)
-- **EventManager**: Zpracovává události prostředí
+| Atribut | Popis |
+|---------|-------|
+| `id` | Unikátní identifikátor |
+| `jmeno`, `prijmeni` | Celé jméno |
+| `titul` | Titul (Babička, Manažer...) |
+| `role` | Zobrazované jméno |
+| `vibe` | Osobnost pro AI prompt |
+| `popis` | Krátký popis vzhledu |
+| `rod` | Pro správné skloňování |
+| `temata` | Seznam zájmových témat |
+| `povaha` | Osobnostní rysy (viz níže) |
 
-### ai/
-Komunikace s LLM:
-- **AIClient**: Wrapper pro OpenAI API
-- **Parser**: Robustní parsování různých formátů odpovědí
-- **PromptBuilder**: Sestavování promptů s kontextem
+### Osobnostní rysy (povaha)
 
-### ui/
-Pygame vykreslování:
-- **Renderer**: Lavička, moře, NPC, bubliny
-- **ChatPanel**: Historie rozhovorů
-- **InputBox**: Zadávání událostí
+Každá postava má tři klíčové vlastnosti:
 
-### memory/
-Persistentní paměť NPC:
-- Ukládá vzpomínky na setkání
-- Podporuje zapomínání (decay)
-- Ukládá se do JSON souboru
+| Rys | Rozsah | Vliv |
+|-----|--------|------|
+| `konfliktnost` | 0.0-1.0 | Tendence ke konfliktům |
+| `hloubavost` | 0.0-1.0 | Tendence k hlubokým rozhovorům |
+| `mluvnost` | 0.0-1.0 | Jak moc mluví vs. mlčí |
 
-## Jak paměť funguje
+Tyto rysy určují dynamicky:
+- Typ konverzace (casual/deep/conflict/quiet)
+- Reakce na události
+- Pravděpodobnost ticha
 
-### Ukládání
+## Přidání nové postavy
 
-Po každém rozhovoru (když někdo odejde) se AI zeptá:
-- Jak ten člověk vypadal?
-- Jaký z něj máš dojem?
-- O čem jste mluvili?
-- Co ses dozvěděl?
+Stačí přidat záznam do `game/data/postavy.json`:
 
-Uloží se **shrnutí**, ne doslovný text.
+```json
+{
+  "nova_postava": {
+    "id": "nova_postava",
+    "jmeno": "Jan",
+    "prijmeni": "Novák",
+    "titul": "Učitel",
+    "role": "Učitel Jan",
+    "vek": 45,
+    "color": [100, 100, 200],
+    "vibe": "Klidný, trpělivý, rád vysvětluje. Mluví srozumitelně.",
+    "popis": "Muž středního věku s brýlemi",
+    "rod": "muž",
+    "temata": ["vzdělávání", "knihy", "historie", "děti", "trpělivost"],
+    "povaha": {
+      "konfliktnost": 0.15,
+      "hloubavost": 0.7,
+      "mluvnost": 0.6
+    }
+  }
+}
+```
 
-### Rozpoznávání
+**Žádný kód není potřeba měnit** - postava se automaticky načte a bude fungovat.
 
-Při dalším setkání se hledá v paměti:
-- `poznam_dobre` (síla > 0.7) - "Ahoj Vlastičko!"
-- `poznam` (síla > 0.5) - "Vy jste ta paní co tu byla minule"
-- `povedome` (síla > 0.3) - "Vy mi někoho připomínáte..."
-- `nejasne` (síla > 0.1) - Vágní pocit známosti
-- `neznam` - "Dobrý den" (cizinec)
+## Director (Režisér scény)
 
-### Zapomínání (Decay)
+Director řídí dramaturgii rozhovoru na základě osobností NPC:
 
-- Každý "den" síla paměti klesá o 2%
-- Pod 5% = vzpomínka se smaže
-- Opakovaná setkání posilují paměť
-- Silné emoce = pomalejší zapomínání
+### Trajektorie
 
-### Vztahy
+| Typ | Délka | Popis |
+|-----|-------|-------|
+| `casual` | 8-16 replik | Běžný rozhovor |
+| `deep` | 14-25 replik | Hluboký, osobní rozhovor |
+| `conflict` | 6-12 replik | Konfliktní scéna |
+| `quiet` | 5-10 replik | Tiché setkání |
 
-Fáze: `cizinci` → `tvare` → `znami` → `pratele`
+Trajektorie se **počítá dynamicky** z `povaha` atributů obou NPC:
+- Vysoká `konfliktnost` → více konfliktů
+- Vysoká `hloubavost` → hlubší rozhovory
+- Nízká `mluvnost` → tišší setkání
 
-| Fáze | Sympatie | Podmínky |
-|------|----------|----------|
-| cizinci | < 0.15 | Neznají se |
-| tvare | ≥ 0.15 | Poznali se, neutrální dojem |
-| znami | ≥ 0.4 | Dobře si rozumí |
-| pratele | ≥ 0.6 | + musí si tykat |
+### Fáze scény
 
-Sleduje se:
-- Sympatie (-1 až +1) - kvalita interakcí
-- Tykání/vykání - formální blízkost
-- Historie - významné události (bonus/penalty)
-
-### Director (Režisér scény)
-
-Director řídí dramaturgii rozhovoru:
-
-**Trajektorie:**
-- `casual` (8-16 replik) - běžný rozhovor
-- `deep` (14-25 replik) - hluboký rozhovor
-- `conflict` (6-12 replik) - konfliktní scéna
-- `quiet` (5-10 replik) - tiché setkání
-
-**Fáze scény:**
 1. `intro` - NPC přišlo, oťukává situaci
 2. `developing` - rozhovor se rozvíjí
 3. `peak` - vrchol, dramatický moment
 4. `closing` - ukončování
 
-Director dává NPC "intenty" (cíle) které ovlivňují jejich chování.
+## Vztahy a paměť
+
+### Fáze vztahů
+
+| Fáze | Sympatie | Podmínky |
+|------|----------|----------|
+| cizinci | < 0.15 | Neznají se |
+| tvare | ≥ 0.15 | Poznali se |
+| znami | ≥ 0.4 | Dobře si rozumí |
+| pratele | ≥ 0.6 | + musí si tykat |
+
+### Vykání/Tykání
+
+- Cizinci si **vždy vykají**
+- Tykání je možné až po návrhu a přijetí
+- AI dostává striktní pravidla pro správné oslovování
+
+### Rozpoznání podle síly paměti
+
+| Síla | Rozpoznání |
+|------|------------|
+| > 0.7 | "Ahoj Vlastičko!" |
+| > 0.5 | "Vy jste ta paní co tu byla minule" |
+| > 0.3 | "Vy mi někoho připomínáte..." |
+| > 0.1 | Vágní pocit známosti |
+| ≤ 0.1 | "Dobrý den" (cizinec) |
 
 ## Konfigurace
 
@@ -205,80 +229,6 @@ AUTO_TAH_INTERVAL = 2.2  # sekundy mezi tahy
 
 # Debug
 DEBUG_AI = True  # Vypisuje prompty do konzole
-```
-
-## Přidání nové postavy
-
-V souboru `game/npc/archetypes.py`:
-
-```python
-ARCHETYPY.append({
-    "id": "nova_postava",
-    "role": "Nová Postava",
-    "vek": 30,
-    "color": (100, 100, 200),
-    "vibe": "Popis osobnosti pro AI...",
-    "popis": "Krátký popis vzhledu",
-    "rod": "muž",  # nebo "žena"
-})
-```
-
-## Přidání nového typu události
-
-V souboru `game/rules/events.py`:
-
-```python
-EVENT_KEYWORDS["novy_typ"] = ["klíčové", "slovo", "pro", "detekci"]
-
-PHYSICAL_REACTIONS["target"]["novy_typ"] = ["Reakce 1", "Reakce 2"]
-PHYSICAL_REACTIONS["observer"]["novy_typ"] = ["Reakce pozorující"]
-```
-
-## Architektura
-
-```
-┌─────────────┐
-│   main.py   │  Herní smyčka, události
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│   app.py    │  Koordinuje všechny moduly
-└──────┬──────┘
-       │
-       ├──────────────┬──────────────┬──────────────┐
-       ▼              ▼              ▼              ▼
-┌─────────────┐┌─────────────┐┌─────────────┐┌─────────────┐
-│   npc/      ││   rules/    ││   ai/       ││   ui/       │
-│ Postavy    ││ Pravidla   ││ LLM klient ││ Vykreslení │
-└─────────────┘└─────────────┘└─────────────┘└─────────────┘
-       │              │              │
-       └──────────────┼──────────────┘
-                      ▼
-               ┌─────────────┐
-               │  memory/    │
-               │ Persistentní│
-               │   paměť     │
-               └─────────────┘
-```
-
-## Příklad paměti
-
-```json
-{
-  "id": "delnik_franta",
-  "popis": "chlap v montérkách, asi 50 let",
-  "jmeno": "Franta",
-  "dojem": "sympatický, bodrý, trochu unavený",
-  "temata": ["práce", "rodina", "moře"],
-  "fakta": [
-    "pracuje na stavbě",
-    "je rozvedený",
-    "syn se s ním nebaví"
-  ],
-  "sila": 0.72,
-  "pocet_setkani": 5
-}
 ```
 
 ## Licence
