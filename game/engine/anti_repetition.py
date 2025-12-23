@@ -16,18 +16,24 @@ import re
 
 # === TOPIC KEYWORDS DICTIONARY ===
 # Mapuje téma na seznam klíčových slov (case insensitive)
+# Kategorie: "kulisa" = přírodní pozadí (nižší penalizace), "smyčka" = obsahové téma (vyšší penalizace)
 TOPIC_KEYWORDS: Dict[str, List[str]] = {
+    # KULISA - přirozené pozadí scény (penalty 0.25)
     "moře": ["moře", "vlny", "voda", "pláž", "příliv", "odliv", "oceán"],
     "počasí": ["slunce", "déšť", "vítr", "mraky", "teplo", "zima", "počasí", "obloha"],
+    "příroda": ["stromy", "ptáci", "květiny", "tráva", "les", "zahrada", "zvířata"],
+    # SMYČKA - obsahová témata (penalty 0.6)
     "rodina": ["rodina", "děti", "manžel", "manželka", "syn", "dcera", "vnuk", "vnučka", "rodiče"],
     "práce": ["práce", "zaměstnání", "kancelář", "šéf", "kolegové", "kariéra", "byznys"],
     "zdraví": ["zdraví", "nemoc", "doktor", "lékař", "bolest", "únava", "léky"],
     "jídlo": ["jídlo", "oběd", "večeře", "snídaně", "hlad", "restaurace", "vaření"],
     "minulost": ["dříve", "kdysi", "vzpomínám", "pamatuji", "mládí", "před lety", "tehdy"],
-    "příroda": ["stromy", "ptáci", "květiny", "tráva", "les", "zahrada", "zvířata"],
     "samota": ["sám", "sama", "osamělý", "ticho", "klid", "samota", "nikdo"],
     "smrt": ["smrt", "zemřel", "pohřeb", "hrob", "konec", "odejít", "ztráta"],
 }
+
+# Kulisová témata mají nižší penalizaci (přirozené pozadí scény)
+KULISA_TOPICS: Set[str] = {"moře", "počasí", "příroda"}
 
 
 @dataclass
@@ -151,6 +157,7 @@ class AntiRepetitionTracker:
                 start_penalty = 0.2  # 1 opakování = mírná
 
         # 3. Topic fatigue - penalizace za opakování stejného tématu
+        # Kulisová témata (moře, počasí, příroda) mají nižší penalizaci
         topic_penalty = 0.0
         proposed_topics = self._detect_topics(proposed_text)
         recent_topics = list(self._recent_topics[npc_id])
@@ -160,8 +167,12 @@ class AntiRepetitionTracker:
                 # Kolikrát se toto téma objevilo v posledních 8 replikách?
                 count = sum(1 for t in recent_topics if t == topic)
                 if count >= self.topic_fatigue_threshold:
-                    # Téma se točí příliš často -> penalizace
-                    topic_penalty = max(topic_penalty, 0.6)  # Downgrade to thought/action
+                    # Kulisa vs obsahová smyčka - různá penalizace
+                    if topic in KULISA_TOPICS:
+                        penalty = 0.25  # Kulisa - mírná, nedělá downgrade
+                    else:
+                        penalty = 0.6   # Obsahová smyčka - downgrade to thought/action
+                    topic_penalty = max(topic_penalty, penalty)
 
         # Kombinuj penalizace (max ze všech, aby se neignorovalo)
         combined = max(phrase_penalty * 1.2, start_penalty, topic_penalty)
