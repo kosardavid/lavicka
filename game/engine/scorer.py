@@ -148,11 +148,13 @@ class SpeakScorer:
 
         # Anti-starvation: low-engagement NPC občas dostane bonus šanci
         # Aby úplně nezmizelo ze scény
+        # Bonus škálovaný podle engagement: čím víc "hladoví", tím větší bonus
         anti_starvation = 0.0
         if state.engagement_drive < self.anti_starvation_threshold:
             if random.random() < self.anti_starvation_chance:
-                # Vyhrál loterii - dostane bonus který kompenzuje penalizace
-                anti_starvation = 0.35  # Dostatečný na překonání engagement penalty
+                # Škálovaný bonus: 0.20 při engagement=0.25, až 0.25 při engagement=0
+                hunger_factor = (self.anti_starvation_threshold - state.engagement_drive) / self.anti_starvation_threshold
+                anti_starvation = 0.20 + 0.05 * hunger_factor  # 0.20-0.25
                 breakdown["anti_starvation_triggered"] = True
         breakdown["anti_starvation"] = anti_starvation
 
