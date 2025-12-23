@@ -2,6 +2,10 @@
 Anti-repetition Tracker - sleduje opakování frází a témat.
 
 Penalizuje NPC které se opakují, aby rozhovory byly pestřejší.
+Obsahuje:
+- Phrase tracking (opakování stejných slov/frází)
+- Start tracking (opakování začátků replik jako "Ano, ...")
+- Topic fatigue (opakování témat jako "moře", "počasí", ...)
 """
 
 from typing import List, Dict, Set
@@ -10,18 +14,35 @@ from collections import deque
 import re
 
 
+# === TOPIC KEYWORDS DICTIONARY ===
+# Mapuje téma na seznam klíčových slov (case insensitive)
+TOPIC_KEYWORDS: Dict[str, List[str]] = {
+    "moře": ["moře", "vlny", "voda", "pláž", "příliv", "odliv", "oceán"],
+    "počasí": ["slunce", "déšť", "vítr", "mraky", "teplo", "zima", "počasí", "obloha"],
+    "rodina": ["rodina", "děti", "manžel", "manželka", "syn", "dcera", "vnuk", "vnučka", "rodiče"],
+    "práce": ["práce", "zaměstnání", "kancelář", "šéf", "kolegové", "kariéra", "byznys"],
+    "zdraví": ["zdraví", "nemoc", "doktor", "lékař", "bolest", "únava", "léky"],
+    "jídlo": ["jídlo", "oběd", "večeře", "snídaně", "hlad", "restaurace", "vaření"],
+    "minulost": ["dříve", "kdysi", "vzpomínám", "pamatuji", "mládí", "před lety", "tehdy"],
+    "příroda": ["stromy", "ptáci", "květiny", "tráva", "les", "zahrada", "zvířata"],
+    "samota": ["sám", "sama", "osamělý", "ticho", "klid", "samota", "nikdo"],
+    "smrt": ["smrt", "zemřel", "pohřeb", "hrob", "konec", "odejít", "ztráta"],
+}
+
+
 @dataclass
 class AntiRepetitionTracker:
     """Sleduje opakování frází a témat."""
 
     max_phrases: int = 10      # Kolik posledních frází sledovat
-    max_topics: int = 5        # Kolik posledních témat sledovat
+    max_topics: int = 8        # Kolik posledních témat sledovat (pro topic fatigue)
     max_starts: int = 8        # Kolik posledních začátků replik sledovat
     phrase_threshold: float = 0.5  # Podobnost frází pro penalizaci
+    topic_fatigue_threshold: int = 3  # Kolikrát téma může být před penalizací
 
     # Interní stav per NPC
     _recent_phrases: Dict[str, deque] = field(default_factory=dict)
-    _recent_topics: Dict[str, deque] = field(default_factory=dict)
+    _recent_topics: Dict[str, deque] = field(default_factory=dict)  # Topic fatigue tracking
     _recent_starts: Dict[str, deque] = field(default_factory=dict)  # Začátky replik
 
     def _ensure_npc(self, npc_id: str) -> None:
@@ -33,6 +54,30 @@ class AntiRepetitionTracker:
         if npc_id not in self._recent_starts:
             self._recent_starts[npc_id] = deque(maxlen=self.max_starts)
 
+    def _detect_topics(self, text: str) -> List[str]:
+        """
+        Detekuje témata v textu podle TOPIC_KEYWORDS slovníku.
+
+        Args:
+            text: Text k analýze
+
+        Returns:
+            Seznam detekovaných témat
+        """
+        if not text:
+            return []
+
+        text_lower = text.lower()
+        detected = []
+
+        for topic, keywords in TOPIC_KEYWORDS.items():
+            for keyword in keywords:
+                if keyword in text_lower:
+                    detected.append(topic)
+                    break  # Jedno téma stačí detekovat jednou
+
+        return detected
+
     def record_speech(self, npc_id: str, text: str, topics: List[str] = None) -> None:
         """
         Zaznamená repliku NPC.
@@ -40,7 +85,7 @@ class AntiRepetitionTracker:
         Args:
             npc_id: ID NPC
             text: Text repliky
-            topics: Seznam témat v replice (volitelné)
+            topics: Seznam témat v replice (volitelné, jinak auto-detekce)
         """
         self._ensure_npc(npc_id)
 
@@ -54,10 +99,10 @@ class AntiRepetitionTracker:
         if start:
             self._recent_starts[npc_id].append(start)
 
-        # Zaznamenej témata
-        if topics:
-            for topic in topics:
-                self._recent_topics[npc_id].append(topic.lower())
+        # Zaznamenej témata (auto-detekce nebo explicitní)
+        detected_topics = topics if topics else self._detect_topics(text)
+        for topic in detected_topics:
+            self._recent_topics[npc_id].append(topic.lower())
 
     def get_penalty(self, npc_id: str, proposed_text: str) -> float:
         """
@@ -105,8 +150,21 @@ class AntiRepetitionTracker:
             elif count >= 1:
                 start_penalty = 0.2  # 1 opakování = mírná
 
-        # Kombinuj penalizace (max z obou, aby se neignorovalo)
-        combined = max(phrase_penalty * 1.2, start_penalty)
+        # 3. Topic fatigue - penalizace za opakování stejného tématu
+        topic_penalty = 0.0
+        proposed_topics = self._detect_topics(proposed_text)
+        recent_topics = list(self._recent_topics[npc_id])
+
+        if proposed_topics and recent_topics:
+            for topic in proposed_topics:
+                # Kolikrát se toto téma objevilo v posledních 8 replikách?
+                count = sum(1 for t in recent_topics if t == topic)
+                if count >= self.topic_fatigue_threshold:
+                    # Téma se točí příliš často -> penalizace
+                    topic_penalty = max(topic_penalty, 0.6)  # Downgrade to thought/action
+
+        # Kombinuj penalizace (max ze všech, aby se neignorovalo)
+        combined = max(phrase_penalty * 1.2, start_penalty, topic_penalty)
         return min(1.0, combined)
 
     def get_all_penalties(self, npc_ids: List[str]) -> Dict[str, float]:
@@ -231,3 +289,22 @@ class AntiRepetitionTracker:
             return "downgrade_to_action"
         else:
             return "reject"
+
+    def get_topic_fatigue_info(self, npc_id: str) -> Dict[str, int]:
+        """
+        Vrátí počet výskytů každého tématu pro NPC (pro debug).
+
+        Args:
+            npc_id: ID NPC
+
+        Returns:
+            Dict mapující téma na počet výskytů
+        """
+        self._ensure_npc(npc_id)
+        recent_topics = list(self._recent_topics[npc_id])
+
+        counts = {}
+        for topic in recent_topics:
+            counts[topic] = counts.get(topic, 0) + 1
+
+        return counts
