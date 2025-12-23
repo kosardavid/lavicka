@@ -300,6 +300,14 @@ class BehaviorEngine:
                     total_npcs_in_scene=len(self._npc_states),
                 )
 
+            # Debug log pro question targeting
+            if was_asked_question:
+                _log("QUESTION_TARGET_DETECTED", {
+                    "npc_id": npc_id,
+                    "total_npcs": len(self._npc_states),
+                    "was_addressed": was_addressed,
+                })
+
             self.drive_updater.update_drives(
                 state=state,
                 npc_data=npc_data,
