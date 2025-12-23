@@ -36,6 +36,7 @@ class NPCBehaviorState:
     speeches_count: int = 0       # Počet replik v této scéně
     last_spoke_turn: int = -1     # Poslední tah kdy mluvil
     last_acted_turn: int = -1     # Poslední tah kdy udělal COKOLI (speech/action/thought)
+    last_selected_turn: int = -1  # Poslední tah kdy byl vybrán pro AI (i když vrátil nothing)
 
     def can_speak(self) -> bool:
         """Může NPC mluvit?"""
@@ -51,6 +52,10 @@ class NPCBehaviorState:
     def on_acted(self, current_turn: int) -> None:
         """Zavoláno když NPC udělal action/thought (ne speech)."""
         self.last_acted_turn = current_turn
+
+    def on_selected(self, current_turn: int) -> None:
+        """Zavoláno když byl NPC vybrán pro AI volání (i když vrátí nothing)."""
+        self.last_selected_turn = current_turn
 
     def on_turn_start(self, energy_regen: float = 0.05) -> None:
         """Zavoláno na začátku každého tahu."""

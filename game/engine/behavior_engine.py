@@ -279,6 +279,11 @@ class BehaviorEngine:
         # 6. Volej AI pro TOP K NPC
         for score in top_scores:
             npc_id = score.npc_id
+            state = self._npc_states.get(npc_id)
+
+            # Zaznamenej výběr (i když vrátí nothing)
+            if state:
+                state.on_selected(self._scene_context.turn_number)
 
             # Extra instrukce
             extra_instruction = ""
@@ -307,7 +312,9 @@ class BehaviorEngine:
                 })
 
                 # Zpracuj odpověď
-                return self._process_response(response, world_event)
+                result = self._process_response(response, world_event)
+                self._scene_context.on_turn_end()
+                return result
 
         # Žádná validní odpověď
         self._scene_context.on_silence()
@@ -336,7 +343,7 @@ class BehaviorEngine:
                 _log("ANTI_REP_REJECT", {"npc_id": npc_id, "action": "reject"})
                 response = NPCResponse(npc_id=npc_id, response_type=ResponseType.NOTHING)
                 self._scene_context.on_nothing()
-                self._scene_context.on_turn_end()
+                # on_turn_end() se volá v process_turn(), ne tady
                 if state:
                     self.drive_updater.on_after_speech(state, was_successful=False)
                 return response
@@ -413,7 +420,7 @@ class BehaviorEngine:
             self._last_speaker_id = npc_id
             self._last_response_text = response.text
 
-        self._scene_context.on_turn_end()
+        # on_turn_end() se volá v process_turn(), ne tady
         return response
 
     # === QUERIES ===

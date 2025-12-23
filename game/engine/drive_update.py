@@ -10,6 +10,7 @@ speak_drive a stay_drive se mění podle:
 - Cooldown (po mluvení krátký drop)
 """
 
+import re
 from typing import Dict, Optional
 from .types import WorldEvent, WorldEventType, NPCBehaviorState, SceneContext
 
@@ -225,6 +226,9 @@ def detect_addressing(
     """
     Detekuje jestli byla poslední replika adresována tomuto NPC.
 
+    Používá regex s word boundary aby nechytala substrings (např. "babička" v "babičkami").
+    Kontroluje začátek věty pro oslovení.
+
     Args:
         last_response_text: Text poslední repliky
         npc_name: Jméno NPC
@@ -238,28 +242,30 @@ def detect_addressing(
 
     text_lower = last_response_text.lower()
 
-    # Kontrola jména (včetně vokativních tvarů)
+    # Kontrola jména (včetně vokativních tvarů) - celé slovo na začátku věty nebo po čárce
     if npc_name:
         vocative_forms = _generate_vocative_forms(npc_name)
         for form in vocative_forms:
-            if form in text_lower:
+            # Vzor: začátek textu/věty nebo po čárce, pak jméno, pak konec slova
+            # (^|[.!?]\s*|,\s*) - začátek nebo po interpunkci/čárce
+            # \b{form}\b - celé slovo
+            pattern = rf'(^|[.!?]\s*|,\s*){re.escape(form)}\b'
+            if re.search(pattern, text_lower):
                 return True
 
     # Kontrola titulu (včetně vokativních tvarů)
     if npc_titul:
         vocative_forms = _generate_vocative_forms(npc_titul)
         for form in vocative_forms:
-            if form in text_lower:
+            pattern = rf'(^|[.!?]\s*|,\s*){re.escape(form)}\b'
+            if re.search(pattern, text_lower):
                 return True
 
-    # Obecné oslovení (Vy, Ty na začátku věty)
+    # Obecné oslovení (Vy, Ty na začátku věty nebo po interpunkci)
     # "Vy jste...", "Ty máš...", "A vy?", "Co ty?"
-    addressing_patterns = [
-        "vy ", "ty ", "vám ", "vás ", "tobě ", "tebe ",
-        " vy?", " ty?", "a vy", "a ty",
-    ]
-    for pattern in addressing_patterns:
-        if pattern in text_lower:
-            return True
+    # Pattern: začátek nebo po . ! ? - pak volitelně "a " - pak vy/ty/vám/vás
+    addressing_pattern = r'(^|[.!?]\s*)(a\s+)?(vy|ty|vám|vás|tobě|tebe)\b'
+    if re.search(addressing_pattern, text_lower):
+        return True
 
     return False

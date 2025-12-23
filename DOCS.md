@@ -285,6 +285,7 @@ class NPCBehaviorState:
     cooldown_turns: int = 0       # Kolik tahů musí čekat
     energy: float = 1.0           # Energie (0-1)
     last_acted_turn: int = -1     # Poslední tah kdy udělal COKOLI (speech/action/thought)
+    last_selected_turn: int = -1  # Poslední tah kdy byl vybrán pro AI (i nothing)
 
 class ResponseType(Enum):
     SPEECH = "speech"       # Mluvená replika
@@ -325,7 +326,14 @@ Dynamická aktualizace speak_drive a stay_drive každý tah:
 ```python
 # Podporuje české vokativy:
 # Vlasta -> Vlasto, Babička -> Babičko, Karel -> Karle
-detect_addressing("Hele Vlasto, co říkáte?", "Vlasta", "Babička") -> True
+
+# Používá regex s word boundary - nechytá substrings!
+detect_addressing("Babičko, jak se máte?", "Jana", "Babička") -> True
+detect_addressing("S babičkami je to těžké.", "Jana", "Babička") -> False  # substring
+
+# Kontroluje začátek věty nebo po čárce:
+detect_addressing("Karle, co myslíte?", "Karel", "") -> True  # po čárce
+detect_addressing("Ten Karel je hodný.", "Karel", "") -> False  # uprostřed věty
 ```
 
 ```python
@@ -370,7 +378,7 @@ score = speak_drive * energy
       - penalizace za právě provedenou akci (just_acted)
 ```
 
-**Penalizace za právě provedenou akci (NOVÉ):**
+**Penalizace za právě provedenou akci:**
 ```python
 # Aby se jedno NPC nestřídalo samo se sebou
 # (např. 15x action za sebou bez šance pro druhé NPC)
@@ -383,6 +391,18 @@ else:
 
 # POZOR: "nothing" se NEPOČÍTÁ jako akce!
 # NPC které mlčí může být znovu vybráno.
+```
+
+**Penalizace za nedávný výběr (řeší "díru" v nothing):**
+```python
+# Když NPC vrátí nothing, stále ho penalizujeme
+# aby druhé NPC dostalo šanci
+if last_selected_turn == current_turn:
+    just_selected = -0.15  # Tento tah = penalizace
+elif last_selected_turn == current_turn - 1:
+    just_selected = -0.075  # Minulý tah = mírná penalizace
+else:
+    just_selected = 0
 ```
 
 #### Anti-Repetition (anti_repetition.py)

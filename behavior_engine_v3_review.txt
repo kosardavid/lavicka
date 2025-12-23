@@ -1,486 +1,227 @@
 ===========================================
-BEHAVIOR ENGINE v3.2 - REVIEW PRO CHATGPT
+BEHAVIOR ENGINE v3.3 - REVIEW PRO CHATGPT
 ===========================================
 Datum: 2025-12-23
-Verze: v3.2 (just_acted penalizace pro střídání NPC)
+Verze: v3.3 (opravy z ChatGPT review)
 
-ZMĚNY OD v3.1:
-1. NOVÉ: Penalizace za právě provedenou akci ve scoreru
-   - Pokud NPC udělalo action/thought tento tah: -0.25 penalizace
-   - Pokud NPC udělalo action/thought minulý tah: -0.125 penalizace
-   - "nothing" se NEPOČÍTÁ jako akce (NPC které mlčí může být znovu vybráno)
-   - Řeší problém: jedno NPC bylo vybíráno 15+ krát za sebou
+ZMĚNY OD v3.2:
 
-2. NOVÉ: last_acted_turn v NPCBehaviorState
-   - Sleduje kdy NPC naposledy udělalo jakoukoliv akci
-   - on_acted() se volá pro thought/action odpovědi
+1. OPRAVA: on_turn_end() se nyní volá pouze JEDNOU
+   - Dříve: voláno uvnitř _process_response() + v process_turn()
+   - Teď: voláno POUZE na konci process_turn() po zpracování odpovědi
+   - Řeší: turn_number se inkrementoval víckrát za tah
 
-ZMĚNY OD v3:
-1. OPRAVA: record_speech se nyní volá VŽDY, i při downgrade/reject
-   - Dříve se downgraded repliky nezaznamenávaly do historie
-   - Teď i downgraded "Ano, ..." zvyšuje penalizaci pro další repliky
+2. NOVÉ: last_selected_turn + penalizace za výběr
+   - Problém: NPC vrátí nothing, je znovu vybráno (díra v systému)
+   - Řešení: last_selected_turn sleduje kdy byl NPC vybrán pro AI
+   - Penalizace: tento tah -0.15, minulý tah -0.075
+   - on_selected() se volá VŽDY když je NPC vybráno (i když vrátí nothing)
 
-ZMĚNY OD v2:
-1. Anti-repetition nyní sleduje začátky replik ("Ano, ...", "No, ...")
-2. Detekce oslovení podporuje české vokativy (Vlasta->Vlasto)
-3. Odstranění filtru délky slov v anti-rep
+3. OPRAVA: detect_addressing() používá regex
+   - Dříve: substring matching ("babička" in text) - false positives
+   - Teď: regex s word boundary + kontrola začátku věty/čárky
+   - Nechytá: "babičkami", "babičkám" (plurály, pády)
+   - Chytá: "Babičko, ..." (vokativ na začátku), ", Karle," (po čárce)
 
 ===========================================
-SOUBOR: game/engine/anti_repetition.py
+ARCHITEKTURA process_turn() a _process_response()
 ===========================================
 
-"""
-Anti-repetition Tracker - sleduje opakování frází a témat.
+```
+process_turn():
+    1. Update stavů (on_turn_start)
+    2. Generuj WorldEvent
+    3. Update drives
+    4. Skóruj NPC a vyber TOP K
+    5. Pro každé NPC v TOP K:
+       a. state.on_selected(turn)  ← NOVÉ: zaznamenej výběr
+       b. Zavolej AI
+       c. Pokud response:
+          - result = _process_response(response, event)
+          - scene_context.on_turn_end()  ← JEDNOU tady
+          - return result
+    6. Žádná odpověď:
+       - scene_context.on_silence()
+       - scene_context.on_turn_end()  ← JEDNOU tady
+       - return None
 
-Penalizuje NPC které se opakují, aby rozhovory byly pestřejší.
-"""
+_process_response():
+    - Zpracuje odpověď od AI
+    - Aktualizuje stavy NPC a scény
+    - NEVOLÁ on_turn_end() ← odstraněno
+    - Vrací NPCResponse
+```
 
-from typing import List, Dict, Set
-from dataclasses import dataclass, field
-from collections import deque
-import re
+===========================================
+SOUBOR: game/engine/types.py (změny)
+===========================================
 
-
+```python
 @dataclass
-class AntiRepetitionTracker:
-    """Sleduje opakování frází a témat."""
+class NPCBehaviorState:
+    npc_id: str
+    speak_drive: float = 0.3
+    stay_drive: float = 0.7
+    cooldown_turns: int = 0
+    energy: float = 1.0
+    speeches_count: int = 0
+    last_spoke_turn: int = -1
+    last_acted_turn: int = -1
+    last_selected_turn: int = -1  # NOVÉ: kdy byl vybrán pro AI
 
-    max_phrases: int = 10      # Kolik posledních frází sledovat
-    max_topics: int = 5        # Kolik posledních témat sledovat
-    max_starts: int = 8        # Kolik posledních začátků replik sledovat
-    phrase_threshold: float = 0.5  # Podobnost frází pro penalizaci
-
-    # Interní stav per NPC
-    _recent_phrases: Dict[str, deque] = field(default_factory=dict)
-    _recent_topics: Dict[str, deque] = field(default_factory=dict)
-    _recent_starts: Dict[str, deque] = field(default_factory=dict)  # Začátky replik
-
-    def _ensure_npc(self, npc_id: str) -> None:
-        """Zajistí že NPC má inicializované fronty."""
-        if npc_id not in self._recent_phrases:
-            self._recent_phrases[npc_id] = deque(maxlen=self.max_phrases)
-        if npc_id not in self._recent_topics:
-            self._recent_topics[npc_id] = deque(maxlen=self.max_topics)
-        if npc_id not in self._recent_starts:
-            self._recent_starts[npc_id] = deque(maxlen=self.max_starts)
-
-    def record_speech(self, npc_id: str, text: str, topics: List[str] = None) -> None:
-        """Zaznamená repliku NPC."""
-        self._ensure_npc(npc_id)
-
-        # Extrahuj klíčové fráze z textu
-        phrases = self._extract_phrases(text)
-        for phrase in phrases:
-            self._recent_phrases[npc_id].append(phrase.lower())
-
-        # Zaznamenej začátek repliky (první slovo)
-        start = self._extract_start(text)
-        if start:
-            self._recent_starts[npc_id].append(start)
-
-        # Zaznamenej témata
-        if topics:
-            for topic in topics:
-                self._recent_topics[npc_id].append(topic.lower())
-
-    def get_penalty(self, npc_id: str, proposed_text: str) -> float:
-        """
-        Vypočítá penalizaci za opakování.
-        Returns: Penalizace 0.0-1.0
-        """
-        self._ensure_npc(npc_id)
-
-        if not proposed_text:
-            return 0.0
-
-        # 1. Penalizace za opakující se fráze/slova
-        proposed_phrases = self._extract_phrases(proposed_text)
-        recent = list(self._recent_phrases[npc_id])
-
-        phrase_penalty = 0.0
-        if recent and proposed_phrases:
-            matches = 0
-            for phrase in proposed_phrases:
-                phrase_lower = phrase.lower()
-                for old_phrase in recent:
-                    if self._phrases_similar(phrase_lower, old_phrase):
-                        matches += 1
-                        break
-            phrase_penalty = matches / len(proposed_phrases)
-
-        # 2. Penalizace za opakující se začátky replik ("Ano, ...", "No, ...")
-        start_penalty = 0.0
-        proposed_start = self._extract_start(proposed_text)
-        recent_starts = list(self._recent_starts[npc_id])
-
-        if proposed_start and recent_starts:
-            # Kolikrát se tento začátek opakuje?
-            count = sum(1 for s in recent_starts if s == proposed_start)
-            if count >= 3:
-                start_penalty = 0.8  # 3+ opakování = vysoká penalizace
-            elif count >= 2:
-                start_penalty = 0.5  # 2 opakování = střední
-            elif count >= 1:
-                start_penalty = 0.2  # 1 opakování = mírná
-
-        # Kombinuj penalizace (max z obou, aby se neignorovalo)
-        combined = max(phrase_penalty * 1.2, start_penalty)
-        return min(1.0, combined)
-
-    def _extract_start(self, text: str) -> str:
-        """Extrahuje normalizovaný začátek repliky (první slovo)."""
-        if not text:
-            return ""
-
-        clean = re.sub(r'[^\w\s]', ' ', text.lower()).strip()
-        words = clean.split()
-
-        if not words:
-            return ""
-
-        # Vrať jen první slovo - klíčové pro detekci "Ano, ..." patternů
-        return words[0]
-
-    def _extract_phrases(self, text: str) -> List[str]:
-        """Extrahuje klíčové fráze z textu."""
-        text = re.sub(r'[^\w\s]', ' ', text)
-        words = text.lower().split()
-
-        # Filtruj stopwords (ale ne podle délky - "ano" je důležité)
-        stopwords = {'a', 'i', 'o', 'u', 'v', 'k', 's', 'z', 'na', 'do', 'to',
-                     'je', 'se', 'že', 'by', 'si', 'ale', 'tak', 'jak', 'co',
-                     'ten', 'ta', 'ty', 'já', 'on', 'ona', 'vy', 'my', 'oni'}
-        words = [w for w in words if w not in stopwords]
-
-        return list(set(words))
-
-    def _phrases_similar(self, phrase1: str, phrase2: str) -> bool:
-        """Zjistí jestli jsou dvě fráze podobné."""
-        if phrase1 == phrase2:
-            return True
-        min_len = min(len(phrase1), len(phrase2))
-        if min_len >= 4:
-            if phrase1[:4] == phrase2[:4]:
-                return True
-        return False
-
-    def get_rejection_action(self, npc_id: str, proposed_text: str) -> str:
-        """
-        Vrátí doporučenou akci při vysoké repetici.
-        Returns: "accept" | "downgrade_to_thought" | "downgrade_to_action" | "reject"
-        """
-        penalty = self.get_penalty(npc_id, proposed_text)
-
-        if penalty < 0.4:
-            return "accept"
-        elif penalty < 0.6:
-            return "downgrade_to_thought"
-        elif penalty < 0.8:
-            return "downgrade_to_action"
-        else:
-            return "reject"
-
+    def on_selected(self, current_turn: int) -> None:
+        """Zavoláno když byl NPC vybrán pro AI volání (i když vrátí nothing)."""
+        self.last_selected_turn = current_turn
+```
 
 ===========================================
-SOUBOR: game/engine/drive_update.py
+SOUBOR: game/engine/scorer.py (změny)
 ===========================================
 
-"""
-drive_update.py - Dynamická aktualizace speak_drive a stay_drive.
-"""
+```python
+def __init__(
+    self,
+    pressure_bonus: float = 0.4,
+    stimulus_bonus: float = 0.2,
+    cooldown_penalty: float = 0.3,
+    low_energy_penalty: float = 0.2,
+    just_acted_penalty: float = 0.25,
+    just_selected_penalty: float = 0.15,  # NOVÉ
+):
 
-from typing import Dict, Optional
-from .types import WorldEvent, WorldEventType, NPCBehaviorState, SceneContext
+def score_npc(...):
+    # ... existující penalizace ...
 
+    # Penalizace za právě provedenou akci
+    just_acted = 0.0
+    if state.last_acted_turn >= 0:
+        turns_since = current_turn - state.last_acted_turn
+        if turns_since == 0:
+            just_acted = -0.25
+        elif turns_since == 1:
+            just_acted = -0.125
 
-class DriveUpdater:
-    """Aktualizuje speak_drive a stay_drive NPC."""
+    # NOVÉ: Penalizace za nedávný výběr (řeší díru v nothing)
+    just_selected = 0.0
+    if state.last_selected_turn >= 0:
+        turns_since = current_turn - state.last_selected_turn
+        if turns_since == 0:
+            just_selected = -0.15
+        elif turns_since == 1:
+            just_selected = -0.075
 
-    def __init__(
-        self,
-        pressure_boost: float = 0.25,
-        silence_growth_rate: float = 0.03,
-        low_energy_penalty: float = 0.1,
-        repetition_penalty_factor: float = 0.15,
-        stay_drive_decay_on_dead_scene: float = 0.08,
-        stay_drive_decay_on_low_energy: float = 0.05,
-        stay_drive_boost_on_good_scene: float = 0.02,
-    ):
-        self.pressure_boost = pressure_boost
-        self.silence_growth_rate = silence_growth_rate
-        self.low_energy_penalty = low_energy_penalty
-        self.repetition_penalty_factor = repetition_penalty_factor
-        self.stay_drive_decay_on_dead_scene = stay_drive_decay_on_dead_scene
-        self.stay_drive_decay_on_low_energy = stay_drive_decay_on_low_energy
-        self.stay_drive_boost_on_good_scene = stay_drive_boost_on_good_scene
+    total = base + pressure + stimulus + cooldown + energy_pen + anti_rep + just_acted + just_selected
+```
 
-    def update_drives(
-        self,
-        state: NPCBehaviorState,
-        npc_data: Dict,
-        world_event: WorldEvent,
-        scene_context: SceneContext,
-        anti_rep_penalty: float = 0.0,
-        was_addressed: bool = False,
-    ) -> None:
-        """Aktualizuje speak_drive a stay_drive NPC."""
-        povaha = npc_data.get("povaha", {})
-        mluvnost = povaha.get("mluvnost", 0.5)
+===========================================
+SOUBOR: game/engine/drive_update.py (změny)
+===========================================
 
-        self._update_speak_drive(state, mluvnost, world_event, anti_rep_penalty, was_addressed)
-        self._update_stay_drive(state, scene_context, anti_rep_penalty)
-
-    def _update_speak_drive(self, state, mluvnost, world_event, anti_rep_penalty, was_addressed):
-        """Aktualizuje speak_drive."""
-        drive = state.speak_drive
-
-        # 1. PRESSURE na toto NPC -> boost
-        if world_event.event_type == WorldEventType.PRESSURE:
-            if world_event.pressure_target == state.npc_id:
-                drive += self.pressure_boost * world_event.intensity
-
-        # 2. Přímé oslovení -> boost
-        if was_addressed:
-            drive += 0.15
-
-        # 3. SILENCE -> růst jen u mluvných postav
-        if world_event.event_type == WorldEventType.SILENCE:
-            if mluvnost > 0.3:
-                growth = self.silence_growth_rate * (mluvnost - 0.3) * 2
-                drive += growth
-
-        # 4. Nízká energie -> penalizace
-        if state.energy < 0.3:
-            penalty = self.low_energy_penalty * (0.3 - state.energy) / 0.3
-            drive -= penalty
-
-        # 5. Cooldown -> mírná penalizace
-        if state.cooldown_turns > 0:
-            drive -= 0.05 * state.cooldown_turns
-
-        # 6. Anti-repetition penalty
-        if anti_rep_penalty > 0:
-            drive -= self.repetition_penalty_factor * anti_rep_penalty
-
-        state.speak_drive = max(0.0, min(1.0, drive))
-
-    def _update_stay_drive(self, state, scene_context, anti_rep_penalty):
-        """Aktualizuje stay_drive."""
-        drive = state.stay_drive
-
-        # 1. Mrtvá scéna -> klesá chuť zůstat
-        if scene_context.is_dying():
-            drive -= self.stay_drive_decay_on_dead_scene
-
-        # 2. Dlouhé ticho -> mírný pokles
-        if scene_context.consecutive_silence >= 3:
-            drive -= 0.03 * (scene_context.consecutive_silence - 2)
-
-        # 3. Nízká energie NPC -> klesá chuť zůstat
-        if state.energy < 0.2:
-            drive -= self.stay_drive_decay_on_low_energy
-
-        # 4. Vysoká repetice -> nuda
-        if anti_rep_penalty > 0.5:
-            drive -= 0.05 * (anti_rep_penalty - 0.5)
-
-        # 5. Živá scéna -> boost
-        if scene_context.scene_energy > 0.6:
-            drive += self.stay_drive_boost_on_good_scene
-
-        # 6. Příliš dlouhý rozhovor -> únava
-        if scene_context.total_speeches > 20:
-            drive -= 0.02 * (scene_context.total_speeches - 20) / 10
-
-        state.stay_drive = max(0.0, min(1.0, drive))
-
-    def on_after_speech(self, state: NPCBehaviorState, was_successful: bool = True) -> None:
-        """Zavoláno po úspěšné replice."""
-        if was_successful:
-            state.speak_drive = max(0.0, state.speak_drive - 0.1)
-        else:
-            state.speak_drive = max(0.0, state.speak_drive - 0.05)
-
-
-def _generate_vocative_forms(name: str) -> list:
-    """
-    Generuje možné vokativní tvary českého jména.
-
-    Pravidla:
-    - Vlasta -> Vlasto (ženská jména na -a)
-    - Babička -> Babičko (jména na -ka)
-    - Karel -> Karle (mužská na souhlásku)
-    - Stařek -> Stařku (jména na -ek)
-    - Pavel -> Pavle (jména na -el)
-    """
-    forms = [name.lower()]
-    name_lower = name.lower()
-
-    if name_lower.endswith("a"):
-        forms.append(name_lower[:-1] + "o")
-    if name_lower.endswith("ek"):
-        forms.append(name_lower[:-2] + "ku")
-    if name_lower.endswith("ka"):
-        forms.append(name_lower[:-2] + "ko")
-    if name_lower and name_lower[-1] not in "aeiouyáéíóúůý":
-        forms.append(name_lower + "e")
-    if name_lower.endswith("el"):
-        forms.append(name_lower[:-2] + "le")
-
-    return forms
-
+```python
+import re  # NOVÉ: pro regex
 
 def detect_addressing(last_response_text: str, npc_name: str, npc_titul: str = "") -> bool:
     """
-    Detekuje jestli byla poslední replika adresována tomuto NPC.
-    Podporuje české vokativy.
+    Detekuje oslovení pomocí regex - nechytá substrings!
+    Kontroluje začátek věty nebo pozici po čárce.
     """
     if not last_response_text:
         return False
 
     text_lower = last_response_text.lower()
 
-    # Kontrola jména (včetně vokativních tvarů)
+    # Kontrola jména (včetně vokativů) - celé slovo na začátku věty/po čárce
     if npc_name:
         vocative_forms = _generate_vocative_forms(npc_name)
         for form in vocative_forms:
-            if form in text_lower:
+            # Vzor: začátek nebo po interpunkci/čárce, pak jméno, pak konec slova
+            pattern = rf'(^|[.!?]\s*|,\s*){re.escape(form)}\b'
+            if re.search(pattern, text_lower):
                 return True
 
-    # Kontrola titulu (včetně vokativních tvarů)
-    if npc_titul:
-        vocative_forms = _generate_vocative_forms(npc_titul)
-        for form in vocative_forms:
-            if form in text_lower:
-                return True
+    # Stejně pro titul...
 
-    # Obecné oslovení
-    addressing_patterns = [
-        "vy ", "ty ", "vám ", "vás ", "tobě ", "tebe ",
-        " vy?", " ty?", "a vy", "a ty",
-    ]
-    for pattern in addressing_patterns:
-        if pattern in text_lower:
-            return True
+    # Obecné oslovení (Vy, Ty) - na začátku věty
+    addressing_pattern = r'(^|[.!?]\s*)(a\s+)?(vy|ty|vám|vás|tobě|tebe)\b'
+    if re.search(addressing_pattern, text_lower):
+        return True
 
     return False
-
-
-===========================================
-KLÍČOVÁ ZMĚNA v3.2: scorer.py
-===========================================
-
-Nová penalizace za právě provedenou akci:
-
-```python
-# V score_npc():
-just_acted = 0.0
-if state.last_acted_turn >= 0:
-    turns_since_acted = current_turn - state.last_acted_turn
-    if turns_since_acted == 0:
-        # Právě udělal akci tento tah - vysoká penalizace
-        just_acted = -self.just_acted_penalty  # -0.25
-    elif turns_since_acted == 1:
-        # Udělal akci minulý tah - mírná penalizace
-        just_acted = -self.just_acted_penalty * 0.5  # -0.125
-
-total = base + pressure + stimulus + cooldown + energy_pen + anti_rep + just_acted
 ```
-
-V behavior_engine.py se volá on_acted() pro thought/action:
-```python
-elif response.response_type == ResponseType.THOUGHT:
-    self._scene_context.on_thought()
-    if state:
-        state.on_acted(self._scene_context.turn_number)
-
-elif response.response_type == ResponseType.ACTION:
-    self._scene_context.on_action()
-    if state:
-        state.on_acted(self._scene_context.turn_number)
-
-# POZOR: NOTHING nevolá on_acted() - není to akce!
-```
-
-
-===========================================
-KLÍČOVÁ ZMĚNA v3.1: behavior_engine.py
-===========================================
-
-V _process_response se nyní record_speech volá VŽDY:
-
-```python
-if response.is_speech():
-    # 1. Post-check anti-repetition (PŘED záznamem)
-    rejection_action = self.anti_rep.get_rejection_action(npc_id, response.text)
-
-    # 2. VŽDY zaznamenej do historie (i při downgrade/reject)
-    self.anti_rep.record_speech(npc_id, response.text)
-
-    # 3. Pak proveď akci podle rejection_action...
-```
-
-Tím se zajistí, že i downgraded/rejected repliky ovlivňují budoucí penalizace.
-Dříve: downgraded "Ano, ..." se nezaznamenalo -> další "Ano, ..." mělo nízkou penalizaci
-Teď: každé "Ano, ..." se zaznamená -> penalizace správně narůstá
-
 
 ===========================================
 TEST VÝSLEDKY
 ===========================================
 
-Test opakujících se začátků replik:
+Test detect_addressing() s regex:
 
-1. "Ano, ta síla lásky je něco zvláštního."
-   Start: "ano", Penalty: 0.00, Action: accept
+1. "Babičko, jak se máte?" + titul="Babička"
+   -> True (vokativ na začátku)
 
-2. "Ano, takové vzpomínky jsou jako zázrak."
-   Start: "ano", Penalty: 0.20, Action: accept
+2. "S babičkami je to těžké." + titul="Babička"
+   -> False (substring - ne false positive!)
 
-3. "Ano, máte pravdu. Život je plný vln."
-   Start: "ano", Penalty: 0.50, Action: downgrade_to_thought
+3. "Vlastičko, co myslíte?" + jmeno="Vlastička"
+   -> True (vokativ)
 
-4. "Ano, první setkání nikdy nezapomeneme."
-   Start: "ano", Penalty: 0.80, Action: reject
+4. "Ta Vlastička je hodná." + jmeno="Vlastička"
+   -> False (uprostřed věty, ne oslovení)
 
-5. "Ano, slunce za obzorem nás opět vrhá..."
-   Start: "ano", Penalty: 0.80, Action: reject
+5. "Vy jste z města?" + jmeno="Karel"
+   -> True (Vy na začátku věty)
 
--> NPC nyní nemůže neustále začínat repliky "Ano, ..."
+6. "Myslím že vy jste chytrý." + jmeno="Karel"
+   -> False (vy uprostřed věty)
 
+7. "Ale no tak, Karle, co to děláte?" + jmeno="Karel"
+   -> True (Karle po čárce)
 
-Test vokativů:
+8. "Já jsem z Prahy. A vy?" + jmeno="Karel"
+   -> True (A vy? po interpunkci)
 
-detect_addressing("Hele Vlasto, co říkáte?", "Vlasta", "") -> True
-detect_addressing("Babičko, co si myslíte?", "", "Babička") -> True
-detect_addressing("Dnes je hezky.", "Vlasta", "Babička") -> False
-
--> Vokativní tvary jsou správně detekovány
+=== Všechny testy prošly! ===
 
 
 ===========================================
 OTÁZKY PRO REVIEW
 ===========================================
 
-1. Je logika sledování začátků replik dostatečná?
-   - Sleduje jen první slovo
-   - Penalizace: 1x=0.2, 2x=0.5, 3x+=0.8
+1. Je architektura on_turn_end() teď správná?
+   - Volá se JEDNOU na konci process_turn()
+   - _process_response() ho už nevolá
 
-2. Jsou prahy pro downgrade/reject správně nastavené?
-   - <0.4 = accept
-   - 0.4-0.6 = downgrade_to_thought
-   - 0.6-0.8 = downgrade_to_action
-   - >0.8 = reject
+2. Je just_selected_penalty (0.15) správná hodnota?
+   - Měla by být menší než just_acted (0.25)?
+   - Nebo by měla být stejná?
 
-3. Měl by se kombinovat phrase_penalty a start_penalty jinak než max()?
-   - Aktuálně: combined = max(phrase_penalty * 1.2, start_penalty)
+3. Je regex pro detect_addressing() dostatečný?
+   - Kontroluje: začátek textu, po . ! ?, po čárce
+   - Nekontorluje: uprostřed věty bez čárky
 
-4. Jsou vokativní pravidla kompletní pro češtinu?
-   - Aktuálně: -a->-o, -ek->-ku, -ka->-ko, souhláska+e, -el->-le
+4. Měly by se sloučit just_acted a just_selected penalizace?
+   - Aktuálně: oddělené, sčítají se
+   - Alternativa: max(just_acted, just_selected)?
 
-5. Je just_acted_penalty (0.25) správná hodnota?
-   - Tento tah: -0.25 (vysoká)
-   - Minulý tah: -0.125 (mírná)
-   - "nothing" se nepočítá jako akce
+5. Další návrhy na zlepšení?
 
-6. Další návrhy na zlepšení?
+===========================================
+ZMĚNY OD PŘEDCHOZÍCH VERZÍ (souhrn)
+===========================================
+
+v3.3:
+- on_turn_end() pouze jednou v process_turn()
+- last_selected_turn + just_selected_penalty
+- detect_addressing() s regex (ne substring)
+
+v3.2:
+- just_acted_penalty pro střídání NPC
+- last_acted_turn tracking
+- nothing se nepočítá jako akce
+
+v3.1:
+- record_speech se volá VŽDY (i při downgrade/reject)
+
+v3.0:
+- Anti-repetition sleduje začátky replik
+- Detekce vokativů pro češtinu
+- Odstranění filtru délky slov

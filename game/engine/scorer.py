@@ -29,12 +29,14 @@ class SpeakScorer:
         cooldown_penalty: float = 0.3,
         low_energy_penalty: float = 0.2,
         just_acted_penalty: float = 0.25,  # Penalizace za právě provedenou akci
+        just_selected_penalty: float = 0.15,  # Penalizace za nedávný výběr (i nothing)
     ):
         self.pressure_bonus = pressure_bonus
         self.stimulus_bonus = stimulus_bonus
         self.cooldown_penalty = cooldown_penalty
         self.low_energy_penalty = low_energy_penalty
         self.just_acted_penalty = just_acted_penalty
+        self.just_selected_penalty = just_selected_penalty
 
     def score_npc(
         self,
@@ -108,8 +110,21 @@ class SpeakScorer:
                 just_acted = -self.just_acted_penalty * 0.5
         breakdown["just_acted"] = just_acted
 
+        # Penalizace za nedávný výběr pro AI (i když vrátil nothing)
+        # Řeší "díru" kdy NPC vrátí nothing a je vybráno znovu
+        just_selected = 0.0
+        if state.last_selected_turn >= 0:
+            turns_since_selected = current_turn - state.last_selected_turn
+            if turns_since_selected == 0:
+                # Právě byl vybrán tento tah
+                just_selected = -self.just_selected_penalty
+            elif turns_since_selected == 1:
+                # Byl vybrán minulý tah
+                just_selected = -self.just_selected_penalty * 0.5
+        breakdown["just_selected"] = just_selected
+
         # Celkové skóre
-        total = max(0.0, base + pressure + stimulus + cooldown + energy_pen + anti_rep + just_acted)
+        total = max(0.0, base + pressure + stimulus + cooldown + energy_pen + anti_rep + just_acted + just_selected)
         breakdown["total"] = total
 
         return NPCScore(
