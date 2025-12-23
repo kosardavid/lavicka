@@ -1,56 +1,120 @@
 ===========================================
-BEHAVIOR ENGINE v3.3 - REVIEW PRO CHATGPT
+BEHAVIOR ENGINE v3.4 - REVIEW PRO CHATGPT
 ===========================================
 Datum: 2025-12-23
-Verze: v3.3 (opravy z ChatGPT review)
+Verze: v3.4 (Social Permission mechanismus)
 
-ZMĚNY OD v3.2:
+ZMĚNY OD v3.3:
 
-1. OPRAVA: on_turn_end() se nyní volá pouze JEDNOU
-   - Dříve: voláno uvnitř _process_response() + v process_turn()
-   - Teď: voláno POUZE na konci process_turn() po zpracování odpovědi
-   - Řeší: turn_number se inkrementoval víckrát za tah
+1. NOVÉ: engagement_drive ("sociální povolení")
+   - Nový drive v NPCBehaviorState: engagement_drive: float = 0.3
+   - Reprezentuje "sociální povolení" mluvit - roste při oslovení/otázce
+   - Brání NPC mluvit bez důvodu (nebylo osloveno, nebyla otázka)
 
-2. NOVÉ: last_selected_turn + penalizace za výběr
-   - Problém: NPC vrátí nothing, je znovu vybráno (díra v systému)
-   - Řešení: last_selected_turn sleduje kdy byl NPC vybrán pro AI
-   - Penalizace: tento tah -0.15, minulý tah -0.075
-   - on_selected() se volá VŽDY když je NPC vybráno (i když vrátí nothing)
+2. NOVÉ: Permission Gate před AI voláním
+   - Pokud engagement_drive < 0.25 AND speak_drive < 0.65:
+     - Přeskoč AI volání (šetří API calls)
+     - Vrať ACTION (pokud speak_drive > 0.45) nebo NOTHING
+   - Loguje PERMISSION_DENIED do DEV_INTENT_LOG
 
-3. OPRAVA: detect_addressing() používá regex
-   - Dříve: substring matching ("babička" in text) - false positives
-   - Teď: regex s word boundary + kontrola začátku věty/čárky
-   - Nechytá: "babičkami", "babičkám" (plurály, pády)
-   - Chytá: "Babičko, ..." (vokativ na začátku), ", Karle," (po čárce)
+3. NOVÉ: detect_question_to_npc()
+   - Detekuje otázku směřovanou na konkrétní NPC
+   - Podmínka: text obsahuje "?" + oslovení (jméno/titul/vy/ty)
+   - Příklad: "Babičko, jak se máte?" -> True
+   - Příklad: "Jak se máte?" -> False (žádné oslovení)
+
+4. NOVÉ: last_addressed_turn v NPCBehaviorState
+   - Sleduje kdy bylo NPC naposledy osloveno/dotázáno
+   - Používá se pro decay engagement při neoslovení
 
 ===========================================
-ARCHITEKTURA process_turn() a _process_response()
+ENGAGEMENT DRIVE - PRAVIDLA AKTUALIZACE
 ===========================================
 
-```
-process_turn():
-    1. Update stavů (on_turn_start)
-    2. Generuj WorldEvent
-    3. Update drives
-    4. Skóruj NPC a vyber TOP K
-    5. Pro každé NPC v TOP K:
-       a. state.on_selected(turn)  ← NOVÉ: zaznamenej výběr
-       b. Zavolej AI
-       c. Pokud response:
-          - result = _process_response(response, event)
-          - scene_context.on_turn_end()  ← JEDNOU tady
-          - return result
-    6. Žádná odpověď:
-       - scene_context.on_silence()
-       - scene_context.on_turn_end()  ← JEDNOU tady
-       - return None
+engagement_drive ROSTE při:
+- Přímé oslovení jménem/titulem: +0.35
+- Otázka směřovaná na NPC: +0.25
+- PRESSURE event cílící na NPC: +0.10 * intensity
 
-_process_response():
-    - Zpracuje odpověď od AI
-    - Aktualizuje stavy NPC a scény
-    - NEVOLÁ on_turn_end() ← odstraněno
-    - Vrací NPCResponse
+engagement_drive KLESÁ při:
+- SILENCE (bez oslovení): -0.05
+- NPC bylo vybráno ale ne osloveno (minulý tah): -0.08
+
+```python
+def _update_engagement_drive(
+    state, world_event, scene_context, was_addressed, was_asked_question
+):
+    drive = state.engagement_drive
+
+    # 1. Přímé oslovení -> velký boost
+    if was_addressed:
+        drive += 0.35
+        state.on_addressed(scene_context.turn_number)
+
+    # 2. Otázka na NPC -> boost
+    if was_asked_question:
+        drive += 0.25
+        state.on_addressed(scene_context.turn_number)
+
+    # 3. PRESSURE na toto NPC -> mírný boost
+    if world_event.event_type == WorldEventType.PRESSURE:
+        if world_event.pressure_target == state.npc_id:
+            drive += 0.10 * world_event.intensity
+
+    # 4. SILENCE -> decay (pokud NPC nebylo osloveno)
+    if world_event.event_type == WorldEventType.SILENCE:
+        if not was_addressed and not was_asked_question:
+            drive -= 0.05
+
+    # 5. NPC vybráno ale ne osloveno -> decay
+    if state.last_selected_turn >= 0:
+        turns_since_selected = scene_context.turn_number - state.last_selected_turn
+        if turns_since_selected == 1:
+            if state.last_addressed_turn < state.last_selected_turn:
+                drive -= 0.08
+
+    state.engagement_drive = max(0.0, min(1.0, drive))
 ```
+
+===========================================
+PERMISSION GATE - IMPLEMENTACE
+===========================================
+
+Před AI voláním v process_turn():
+
+```python
+# === PERMISSION GATE ===
+if state:
+    if state.engagement_drive < 0.25 and state.speak_drive < 0.65:
+        permission_denied = True
+        _log("PERMISSION_DENIED", {
+            "npc_id": npc_id,
+            "engagement_drive": state.engagement_drive,
+            "speak_drive": state.speak_drive,
+        })
+
+        # Generická akce nebo nothing
+        if state.speak_drive > 0.45:
+            response = NPCResponse(
+                npc_id=npc_id,
+                response_type=ResponseType.ACTION,
+                text=random.choice(generic_actions),
+            )
+        else:
+            response = NPCResponse(
+                npc_id=npc_id,
+                response_type=ResponseType.NOTHING,
+            )
+        result = self._process_response(response, world_event)
+        self._scene_context.on_turn_end()
+        return result
+```
+
+Generic actions pro Permission Gate:
+- "Pozoruje okolí."
+- "Zamyšleně přikývne."
+- "Podívá se na moře."
+- "Pousměje se."
 
 ===========================================
 SOUBOR: game/engine/types.py (změny)
@@ -62,151 +126,173 @@ class NPCBehaviorState:
     npc_id: str
     speak_drive: float = 0.3
     stay_drive: float = 0.7
+    engagement_drive: float = 0.3  # NOVÉ: "sociální povolení" mluvit
     cooldown_turns: int = 0
     energy: float = 1.0
     speeches_count: int = 0
     last_spoke_turn: int = -1
     last_acted_turn: int = -1
-    last_selected_turn: int = -1  # NOVÉ: kdy byl vybrán pro AI
+    last_selected_turn: int = -1
+    last_addressed_turn: int = -1  # NOVÉ: kdy byl osloven/dotázán
 
-    def on_selected(self, current_turn: int) -> None:
-        """Zavoláno když byl NPC vybrán pro AI volání (i když vrátí nothing)."""
-        self.last_selected_turn = current_turn
-```
-
-===========================================
-SOUBOR: game/engine/scorer.py (změny)
-===========================================
-
-```python
-def __init__(
-    self,
-    pressure_bonus: float = 0.4,
-    stimulus_bonus: float = 0.2,
-    cooldown_penalty: float = 0.3,
-    low_energy_penalty: float = 0.2,
-    just_acted_penalty: float = 0.25,
-    just_selected_penalty: float = 0.15,  # NOVÉ
-):
-
-def score_npc(...):
-    # ... existující penalizace ...
-
-    # Penalizace za právě provedenou akci
-    just_acted = 0.0
-    if state.last_acted_turn >= 0:
-        turns_since = current_turn - state.last_acted_turn
-        if turns_since == 0:
-            just_acted = -0.25
-        elif turns_since == 1:
-            just_acted = -0.125
-
-    # NOVÉ: Penalizace za nedávný výběr (řeší díru v nothing)
-    just_selected = 0.0
-    if state.last_selected_turn >= 0:
-        turns_since = current_turn - state.last_selected_turn
-        if turns_since == 0:
-            just_selected = -0.15
-        elif turns_since == 1:
-            just_selected = -0.075
-
-    total = base + pressure + stimulus + cooldown + energy_pen + anti_rep + just_acted + just_selected
+    def on_addressed(self, current_turn: int) -> None:
+        """Zavoláno když byl NPC osloven nebo mu byla položena otázka."""
+        self.last_addressed_turn = current_turn
 ```
 
 ===========================================
 SOUBOR: game/engine/drive_update.py (změny)
 ===========================================
 
+Nové parametry v DriveUpdater.__init__():
 ```python
-import re  # NOVÉ: pro regex
+# Engagement drive parametry
+engagement_addressed_boost: float = 0.35,
+engagement_question_boost: float = 0.25,
+engagement_pressure_boost: float = 0.10,
+engagement_silence_decay: float = 0.05,
+engagement_unaddressed_decay: float = 0.08,
+```
 
-def detect_addressing(last_response_text: str, npc_name: str, npc_titul: str = "") -> bool:
+Nová metoda _update_engagement_drive() - viz výše.
+
+Nová funkce:
+```python
+def detect_question_to_npc(
+    text: str,
+    npc_name: str,
+    npc_titul: str = "",
+) -> bool:
     """
-    Detekuje oslovení pomocí regex - nechytá substrings!
-    Kontroluje začátek věty nebo pozici po čárce.
+    Detekuje jestli text obsahuje otázku směřovanou na konkrétní NPC.
+    Podmínky: text obsahuje "?" + oslovení NPC
     """
-    if not last_response_text:
+    if not text or "?" not in text:
         return False
+    return detect_addressing(text, npc_name, npc_titul)
+```
 
-    text_lower = last_response_text.lower()
+===========================================
+SOUBOR: game/engine/behavior_engine.py (změny)
+===========================================
 
-    # Kontrola jména (včetně vokativů) - celé slovo na začátku věty/po čárce
-    if npc_name:
-        vocative_forms = _generate_vocative_forms(npc_name)
-        for form in vocative_forms:
-            # Vzor: začátek nebo po interpunkci/čárce, pak jméno, pak konec slova
-            pattern = rf'(^|[.!?]\s*|,\s*){re.escape(form)}\b'
-            if re.search(pattern, text_lower):
-                return True
+Nové importy:
+```python
+from .drive_update import DriveUpdater, detect_addressing, detect_question_to_npc
+```
 
-    # Stejně pro titul...
+V process_turn() - detekce oslovení a otázky:
+```python
+# Detekce oslovení a otázky pro engagement_drive
+last_text = ""
+if self._history:
+    last_text = self._history[-1].get("text", "")
 
-    # Obecné oslovení (Vy, Ty) - na začátku věty
-    addressing_pattern = r'(^|[.!?]\s*)(a\s+)?(vy|ty|vám|vás|tobě|tebe)\b'
-    if re.search(addressing_pattern, text_lower):
-        return True
+for npc_id in top_k:
+    npc_data = self._get_npc_data(npc_id)
+    npc_name = npc_data.get("jmeno", "")
+    npc_titul = npc_data.get("titul", "")
 
-    return False
+    was_addressed = detect_addressing(last_text, npc_name, npc_titul)
+    was_asked_question = detect_question_to_npc(last_text, npc_name, npc_titul)
+
+    # Update drives s engagement
+    self._drive_updater.update_drives(
+        state=state,
+        npc_data=npc_data,
+        world_event=world_event,
+        scene_context=self._scene_context,
+        anti_rep_penalty=anti_penalties.get(npc_id, 0.0),
+        was_addressed=was_addressed,
+        was_asked_question=was_asked_question,
+    )
 ```
 
 ===========================================
 TEST VÝSLEDKY
 ===========================================
 
-Test detect_addressing() s regex:
+Test detect_question_to_npc():
 
-1. "Babičko, jak se máte?" + titul="Babička"
-   -> True (vokativ na začátku)
+1. "Babičko, jak se máte?" + jmeno="Vlasta", titul="Babička"
+   -> True (otázka + oslovení titulem)
 
-2. "S babičkami je to těžké." + titul="Babička"
-   -> False (substring - ne false positive!)
+2. "Jak se máte?" + jmeno="Vlasta", titul="Babička"
+   -> False (otázka bez oslovení)
 
-3. "Vlastičko, co myslíte?" + jmeno="Vlastička"
-   -> True (vokativ)
+3. "Krásné počasí, Vlastičko." + jmeno="Vlastička"
+   -> False (není otázka)
 
-4. "Ta Vlastička je hodná." + jmeno="Vlastička"
-   -> False (uprostřed věty, ne oslovení)
+4. "Vy jste z Prahy?" + jmeno="Karel"
+   -> True (otázka + Vy na začátku)
 
-5. "Vy jste z města?" + jmeno="Karel"
-   -> True (Vy na začátku věty)
-
-6. "Myslím že vy jste chytrý." + jmeno="Karel"
-   -> False (vy uprostřed věty)
-
-7. "Ale no tak, Karle, co to děláte?" + jmeno="Karel"
-   -> True (Karle po čárce)
-
-8. "Já jsem z Prahy. A vy?" + jmeno="Karel"
-   -> True (A vy? po interpunkci)
+5. "A ty, Karle?" + jmeno="Karel"
+   -> True (otázka + jméno)
 
 === Všechny testy prošly! ===
 
+Spuštění hry: OK, žádné chyby.
+
+===========================================
+ARCHITEKTURA - SOUHRN
+===========================================
+
+```
+process_turn():
+    1. Update stavů (on_turn_start)
+    2. Generuj WorldEvent
+    3. Pro každé NPC:
+       a. Detekuj oslovení/otázku
+       b. Update drives (speak, stay, engagement)  <- NOVÉ engagement
+    4. Skóruj NPC a vyber TOP K
+    5. Pro každé NPC v TOP K:
+       a. state.on_selected(turn)
+       b. === PERMISSION GATE ===              <- NOVÉ
+          - Pokud engagement < 0.25 AND speak < 0.65:
+            - Vrať ACTION nebo NOTHING bez AI volání
+       c. Zavolej AI
+       d. Pokud response:
+          - result = _process_response(response, event)
+          - scene_context.on_turn_end()
+          - return result
+    6. Žádná odpověď:
+       - scene_context.on_silence()
+       - scene_context.on_turn_end()
+       - return None
+```
 
 ===========================================
 OTÁZKY PRO REVIEW
 ===========================================
 
-1. Je architektura on_turn_end() teď správná?
-   - Volá se JEDNOU na konci process_turn()
-   - _process_response() ho už nevolá
+1. Jsou hodnoty engagement boostů správné?
+   - addressed_boost = 0.35
+   - question_boost = 0.25
+   - pressure_boost = 0.10
 
-2. Je just_selected_penalty (0.15) správná hodnota?
-   - Měla by být menší než just_acted (0.25)?
-   - Nebo by měla být stejná?
+2. Je Permission Gate prahová hodnota správná?
+   - engagement < 0.25 AND speak < 0.65
+   - Měly by být jiné prahy?
 
-3. Je regex pro detect_addressing() dostatečný?
-   - Kontroluje: začátek textu, po . ! ?, po čárce
-   - Nekontorluje: uprostřed věty bez čárky
+3. Měl by engagement_drive ovlivňovat i scoring?
+   - Aktuálně: engagement jen v Permission Gate
+   - Alternativa: přidat engagement do score výpočtu?
 
-4. Měly by se sloučit just_acted a just_selected penalizace?
-   - Aktuálně: oddělené, sčítají se
-   - Alternativa: max(just_acted, just_selected)?
+4. Je decay při neoslovení správný?
+   - silence_decay = 0.05
+   - unaddressed_decay = 0.08
 
 5. Další návrhy na zlepšení?
 
 ===========================================
 ZMĚNY OD PŘEDCHOZÍCH VERZÍ (souhrn)
 ===========================================
+
+v3.4:
+- engagement_drive ("sociální povolení")
+- Permission Gate před AI voláním
+- detect_question_to_npc()
+- last_addressed_turn tracking
 
 v3.3:
 - on_turn_end() pouze jednou v process_turn()

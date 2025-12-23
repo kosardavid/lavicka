@@ -282,10 +282,12 @@ class NPCBehaviorState:
     npc_id: str
     speak_drive: float = 0.3      # Jak moc chce mluvit (0-1) - DYNAMICKY SE MĚNÍ
     stay_drive: float = 0.7       # Jak moc chce zůstat (0-1) - DYNAMICKY SE MĚNÍ
+    engagement_drive: float = 0.3  # "Sociální povolení" mluvit (0-1) - roste při oslovení
     cooldown_turns: int = 0       # Kolik tahů musí čekat
     energy: float = 1.0           # Energie (0-1)
     last_acted_turn: int = -1     # Poslední tah kdy udělal COKOLI (speech/action/thought)
     last_selected_turn: int = -1  # Poslední tah kdy byl vybrán pro AI (i nothing)
+    last_addressed_turn: int = -1  # Poslední tah kdy byl osloven/dotázán
 
 class ResponseType(Enum):
     SPEECH = "speech"       # Mluvená replika
@@ -305,7 +307,7 @@ class SceneContext:
 
 #### DriveUpdater (drive_update.py)
 
-Dynamická aktualizace speak_drive a stay_drive každý tah:
+Dynamická aktualizace speak_drive, stay_drive a engagement_drive každý tah:
 
 **speak_drive se mění podle:**
 - PRESSURE na NPC → +0.25 boost
@@ -322,6 +324,24 @@ Dynamická aktualizace speak_drive a stay_drive každý tah:
 - Vysoká repetice → klesá (nuda)
 - Živá scéna (energy > 0.6) → boost
 
+**engagement_drive ("sociální povolení") se mění podle:**
+- Přímé oslovení jménem/titulem → +0.35 boost
+- Otázka směřovaná na NPC → +0.25 boost
+- PRESSURE event na NPC → +0.10 * intensity
+- SILENCE (bez oslovení) → -0.05 decay
+- NPC vybráno ale ne osloveno → -0.08 decay
+
+**Permission Gate (před AI voláním):**
+```python
+# Pokud NPC nemá "sociální povolení", přeskoč AI call
+if engagement_drive < 0.25 and speak_drive < 0.65:
+    # Vrať NOTHING nebo ACTION místo volání AI
+    if speak_drive > 0.45:
+        return ACTION("Pozoruje okolí.")
+    else:
+        return NOTHING
+```
+
 **Detekce oslovení (detect_addressing):**
 ```python
 # Podporuje české vokativy:
@@ -336,10 +356,19 @@ detect_addressing("Karle, co myslíte?", "Karel", "") -> True  # po čárce
 detect_addressing("Ten Karel je hodný.", "Karel", "") -> False  # uprostřed věty
 ```
 
+**Detekce otázky na NPC (detect_question_to_npc):**
+```python
+# Otázka = text obsahuje "?" + oslovení
+detect_question_to_npc("Babičko, jak se máte?", "Jana", "Babička") -> True
+detect_question_to_npc("Jak se máte?", "Jana", "Babička") -> False  # žádné oslovení
+detect_question_to_npc("Vy jste z Prahy?", "Karel", "") -> True
+```
+
 ```python
 class DriveUpdater:
-    def update_drives(state, npc_data, world_event, scene_context, anti_rep_penalty, was_addressed):
-        # Aktualizuje speak_drive a stay_drive
+    def update_drives(state, npc_data, world_event, scene_context,
+                      anti_rep_penalty, was_addressed, was_asked_question):
+        # Aktualizuje speak_drive, stay_drive a engagement_drive
 
     def on_after_speech(state, was_successful):
         # Drop speak_drive po mluvení
