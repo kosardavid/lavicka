@@ -895,7 +895,99 @@ def get_topic_suggestions(self, npc_a, npc_b) -> str:
 
 ---
 
-### 5. Paměť (memory/pamet.py)
+### 5. AI Prompt Rozšíření (v3.7)
+
+Nová vylepšení promptu pro AI pro přirozenější rozhovory.
+
+#### Director Context (Režie scény)
+
+Director trajectory a phase se nyní propaguje do AI promptu jako jemné vedení:
+
+```python
+# Mapování trajectory/phase -> scene_state
+if traj == "conflict" and phase == "peak":
+    scene_state = "conflict_peak"
+elif phase == "closing":
+    scene_state = "goodbye"
+elif traj == "quiet":
+    scene_state = "quiet"
+elif traj == "deep":
+    scene_state = "deep"
+elif traj == "conflict":
+    scene_state = "conflict"
+else:
+    scene_state = "casual"
+
+# Director context texty
+ctx_map = {
+    "casual": "Udržuj lehký small talk, civilní tón.",
+    "deep": "Můžeš jemně jít do osobnější roviny, ale přirozeně a postupně.",
+    "quiet": "Jsi spíš tichý/á, mluv krátce, klidně nech pauzy.",
+    "conflict": "Je cítit drobné napětí. Můžeš být trochu ostřejší, ale ne přehnaně.",
+    "conflict_peak": "Napětí vrcholí. Drobná výměna názorů, ale ne velká hádka.",
+    "goodbye": "Rozhovor se chýlí ke konci. Směřuj k rozloučení.",
+}
+```
+
+V promptu se zobrazuje jako:
+```
+=== REŽIE SCÉNY (jemně) ===
+Udržuj lehký small talk, civilní tón.
+```
+
+#### Anti-Repetition Instructions
+
+Prompt obsahuje upozornění na poslední repliky NPC, aby se AI vyhnula opakování:
+
+```python
+# Extrakce posledních 2 replik NPC z roleplay_log
+own_lines = [l for l in lines if l.startswith(NPC_ROLE + ":")]
+last_own = own_lines[-2:] if len(own_lines) >= 2 else own_lines
+```
+
+V promptu:
+```
+=== NEOPAKUJ SE ===
+Vyhni se podobným formulacím jako tvoje poslední repliky:
+- "No, tak to je zajímavý..."
+- "Hm, to je pravda..."
+Nezačínej každou repliku pozdravem.
+Místo obecných vět použij konkrétní detail (vítr, únava, oblečení, práce...).
+```
+
+#### Mikroakce (Action Variability)
+
+Pro typ odpovědi "action" jsou v promptu nabízeny civilní mikroakce:
+
+```
+Pro "action" použij civilní mikroakce:
+opře se, protáhne ramena, promne si ruce, upraví bundu, posune se na lavičce,
+krátce se usměje, odvrátí pohled, ztiší hlas, přikývne, povzdechne si,
+podívá se stranou, zkontroluje telefon, zastrčí ruce do kapes...
+Neopakuj "podívá se na moře" víc než jednou. Akce ať odpovídá tvé náladě.
+```
+
+#### Scene State pro Depth Systém
+
+`scene_state` se předává i do depth systému pro správné filtrování tajemství:
+
+```python
+# V relationship_rules dict
+relationship_rules = {
+    ...
+    "director_ctx": director_ctx,  # Text pro prompt
+    "scene_state": scene_state,    # Pro depth systém (tajemství)
+}
+```
+
+Tajemství s policy `share_only_if_breakpoint` se uvolní jen při:
+- `conflict_peak` - vrchol konfliktu
+- `goodbye` - loučení
+- `leaving` - odchod
+
+---
+
+### 6. Paměť (memory/pamet.py)
 
 Persistentní paměť NPC uložená v JSON.
 
@@ -932,7 +1024,7 @@ Persistentní paměť NPC uložená v JSON.
 
 ---
 
-### 6. Fáze vztahů
+### 7. Fáze vztahů
 
 Vztahy mezi NPC procházejí fázemi:
 
@@ -1195,6 +1287,9 @@ Director **nenutí**, jen **navádí**:
 
 - [x] Behavior Engine v1 - NPC rozhodují sami
 - [x] Depth systém - realistické omezení hloubky rozhovorů
+- [x] Director propagation - režie scény propagována do promptu (v3.7)
+- [x] Anti-repetition instrukce - prevence opakování v promptu (v3.7)
+- [x] Mikroakce variabilita - civilní akce pro typ "action" (v3.7)
 - [ ] Více archetypů postav
 - [ ] Denní/noční cyklus
 - [ ] Zvukové efekty

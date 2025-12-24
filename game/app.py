@@ -148,6 +148,39 @@ class LavickaApp:
 
             if soused:
                 vztah = self.relationships.get(npc, soused)
+
+                # Director context - jemné vedení scény
+                director_ctx = ""
+                scene_state = None
+                if self.director.is_active() and self.director.state:
+                    phase = self.director.state.phase
+                    traj = self.director.state.trajectory
+
+                    # Mapování na scene_state pro depth systém
+                    if traj == "conflict" and phase == "peak":
+                        scene_state = "conflict_peak"
+                    elif phase == "closing":
+                        scene_state = "goodbye"
+                    elif traj == "quiet":
+                        scene_state = "quiet"
+                    elif traj == "deep":
+                        scene_state = "deep"
+                    elif traj == "conflict":
+                        scene_state = "conflict"
+                    else:
+                        scene_state = "casual"
+
+                    # Jemný director_ctx text
+                    ctx_map = {
+                        "casual": "Udržuj lehký small talk, civilní tón.",
+                        "deep": "Můžeš jemně jít do osobnější roviny, ale přirozeně a postupně.",
+                        "quiet": "Jsi spíš tichý/á, mluv krátce, klidně nech pauzy.",
+                        "conflict": "Je cítit drobné napětí. Můžeš být trochu ostřejší, ale ne přehnaně.",
+                        "conflict_peak": "Napětí vrcholí. Drobná výměna názorů, ale ne velká hádka.",
+                        "goodbye": "Rozhovor se chýlí ke konci. Směřuj k rozloučení.",
+                    }
+                    director_ctx = ctx_map.get(scene_state, "")
+
                 relationship_rules = {
                     "pacing": self.relationships.get_pacing_rule(npc, soused),
                     "addressing": self.relationships.get_addressing_rule(npc, soused),
@@ -157,6 +190,15 @@ class LavickaApp:
                     "tykani": vztah.tykani,
                     # Closeness level pro depth systém
                     "closeness_level": vztah.get_closeness_level(),
+                    # Scene state pro depth systém (z Directora)
+                    "scene_state": scene_state,
+                    # Director context - jemné vedení
+                    "director_ctx": director_ctx,
+                    # Name exchange rule
+                    "name_exchange_rule": self.relationships.get_name_exchange_rule(npc, soused),
+                    # Awkwardness / exit intent
+                    "is_awkward": self.relationships.is_awkward(npc, soused),
+                    "wants_to_exit": self.relationships.wants_to_exit(npc, soused),
                 }
                 memory_context = vytvor_kontext_z_pameti(
                     self.pamet, npc['id'], soused['id'], vztah.familiarity
@@ -198,6 +240,12 @@ class LavickaApp:
         # Debug výpis
         if DEV_INTENT_LOG_ENABLED:
             safe_print(f"[ENGINE] {self.behavior_engine.get_debug_info()}")
+            # Logovat vztah pokud jsou dva NPC
+            if len([s for s in self.sedadla if s]) == 2:
+                npc_a, npc_b = [s for s in self.sedadla if s]
+                vztah = self.relationships.get(npc_a, npc_b)
+                safe_print(f"[VZTAH] fam={vztah.familiarity:.1f}, sym={vztah.sympathy:+.2f}, "
+                          f"close={vztah.get_closeness_level()}, tykani={vztah.tykani}, names={vztah.name_exchange}")
 
         if not response:
             # Ticho - nikdo nemluvil
@@ -254,13 +302,15 @@ class LavickaApp:
         msg_type = 'thought' if typ == ResponseType.THOUGHT else 'speech'
         self._add_to_history(npc['role'], text, msg_type)
 
-        # Aktualizovat vztah
+        # Aktualizovat vztah - relationships.py je source of truth
         if soused and typ == ResponseType.SPEECH:
             self.relationships.update_after_speech(npc, soused, text)
             vztah_session = self.relationships.get(npc, soused)
+            # Synchronizovat stav do persistentní paměti
+            # Sympatie se přebírá z relationships, ne počítá znovu
             self.pamet.aktualizuj_vztah(
                 npc['id'], soused['id'],
-                sympatie_zmena=0.02,
+                sympatie_zmena=0,  # Nepřidávat - už je v relationships
                 tykani=vztah_session.tykani if vztah_session.tykani else None
             )
 
@@ -383,6 +433,39 @@ class LavickaApp:
 
         if soused:
             vztah = self.relationships.get(npc, soused)
+
+            # Director context - jemné vedení scény
+            director_ctx = ""
+            scene_state = None
+            if self.director.is_active() and self.director.state:
+                phase = self.director.state.phase
+                traj = self.director.state.trajectory
+
+                # Mapování na scene_state pro depth systém
+                if traj == "conflict" and phase == "peak":
+                    scene_state = "conflict_peak"
+                elif phase == "closing":
+                    scene_state = "goodbye"
+                elif traj == "quiet":
+                    scene_state = "quiet"
+                elif traj == "deep":
+                    scene_state = "deep"
+                elif traj == "conflict":
+                    scene_state = "conflict"
+                else:
+                    scene_state = "casual"
+
+                # Jemný director_ctx text
+                ctx_map = {
+                    "casual": "Udržuj lehký small talk, civilní tón.",
+                    "deep": "Můžeš jemně jít do osobnější roviny, ale přirozeně a postupně.",
+                    "quiet": "Jsi spíš tichý/á, mluv krátce, klidně nech pauzy.",
+                    "conflict": "Je cítit drobné napětí. Můžeš být trochu ostřejší, ale ne přehnaně.",
+                    "conflict_peak": "Napětí vrcholí. Drobná výměna názorů, ale ne velká hádka.",
+                    "goodbye": "Rozhovor se chýlí ke konci. Směřuj k rozloučení.",
+                }
+                director_ctx = ctx_map.get(scene_state, "")
+
             relationship_rules = {
                 "pacing": self.relationships.get_pacing_rule(npc, soused),
                 "addressing": self.relationships.get_addressing_rule(npc, soused),
@@ -392,6 +475,15 @@ class LavickaApp:
                 "tykani": vztah.tykani,
                 # Closeness level pro depth systém
                 "closeness_level": vztah.get_closeness_level(),
+                # Scene state pro depth systém (z Directora)
+                "scene_state": scene_state,
+                # Director context - jemné vedení
+                "director_ctx": director_ctx,
+                # Name exchange rule
+                "name_exchange_rule": self.relationships.get_name_exchange_rule(npc, soused),
+                # Awkwardness / exit intent
+                "is_awkward": self.relationships.is_awkward(npc, soused),
+                "wants_to_exit": self.relationships.wants_to_exit(npc, soused),
             }
             memory_context = vytvor_kontext_z_pameti(
                 self.pamet, npc['id'], soused['id'], vztah.familiarity
@@ -454,15 +546,15 @@ class LavickaApp:
         # Přidat do historie
         self._add_to_history(npc['role'], text, typ)
 
-        # Aktualizovat vztah
+        # Aktualizovat vztah - relationships.py je source of truth
         if soused and typ == 'speech':
             self.relationships.update_after_speech(npc, soused, text)
 
-            # Synchronizovat tykání z RelationshipManager do paměti
+            # Synchronizovat stav do persistentní paměti
             vztah_session = self.relationships.get(npc, soused)
             self.pamet.aktualizuj_vztah(
                 npc['id'], soused['id'],
-                sympatie_zmena=0.02,
+                sympatie_zmena=0,  # Nepřidávat - už je v relationships
                 tykani=vztah_session.tykani if vztah_session.tykani else None
             )
 

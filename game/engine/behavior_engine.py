@@ -103,6 +103,7 @@ class BehaviorEngine:
 
         # Historie všech odpovědí pro správné trackování
         self._history: List[Dict[str, Any]] = []
+        self._last_anti_rep_penalties: Dict[str, float] = {}  # Pro debug
 
         # Max po sobě jdoucí repliky od stejného NPC
         self.max_consecutive_speaker = 2
@@ -280,6 +281,7 @@ class BehaviorEngine:
         anti_rep_penalties = self.anti_rep.get_all_penalties(
             list(self._npc_states.keys())
         )
+        self._last_anti_rep_penalties = anti_rep_penalties  # Pro debug
 
         # 3.5 Update drives pro všechna NPC
         for npc_id, state in self._npc_states.items():
@@ -662,17 +664,20 @@ class BehaviorEngine:
         ctx = self._scene_context
         states_info = []
         for npc_id, state in self._npc_states.items():
+            rep_pen = self._last_anti_rep_penalties.get(npc_id, 0.0)
             states_info.append(
-                f"{npc_id}: drive={state.speak_drive:.2f}, "
-                f"energy={state.energy:.2f}, cd={state.cooldown_turns}"
+                f"{npc_id}: speak={state.speak_drive:.2f}, "
+                f"stay={state.stay_drive:.2f}, "
+                f"eng={state.engagement_drive:.2f}, "
+                f"nrg={state.energy:.2f}, rep={rep_pen:.2f}, cd={state.cooldown_turns}"
             )
 
         return (
-            f"Turn: {ctx.turn_number}, "
-            f"Speeches: {ctx.total_speeches}, "
-            f"Energy: {ctx.scene_energy:.2f}, "
-            f"Silence: {ctx.consecutive_silence} | "
-            + " | ".join(states_info)
+            f"T{ctx.turn_number} | "
+            f"Sp:{ctx.total_speeches} | "
+            f"ScE:{ctx.scene_energy:.2f} | "
+            f"Sil:{ctx.consecutive_silence} || "
+            + " || ".join(states_info)
         )
 
 

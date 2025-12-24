@@ -194,6 +194,9 @@ Nedávné události:
         tykani = relationship_rules.get("tykani", False)
         closeness_level = relationship_rules.get("closeness_level", 0)
         scene_state = relationship_rules.get("scene_state", None)
+        name_exchange_rule = relationship_rules.get("name_exchange_rule", "")
+        is_awkward = relationship_rules.get("is_awkward", False)
+        wants_to_exit = relationship_rules.get("wants_to_exit", False)
 
         # === DEPTH SYSTÉM (KROK 4) ===
         # Sestavení depth kontextu pro omezení hloubky rozhovorů
@@ -241,9 +244,64 @@ PRAVIDLA HLOUBKY:
 - Pokud téma není povoleno, použij thought (myšlenku) nebo mlč.
 - Některá tajemství NESMÍ být nikdy vyslovena - ani blízkým.
 - Mlčení je validní odpověď. Nemusíš vždy něco říct.
-- I při vysoké blízkosti můžeš odmítnout osobní téma.""")
+- I při vysoké blízkosti můžeš odmítnout osobní téma.
+- Pokud se cítíš v rozpacích, můžeš změnit téma nebo říct "Nevím..." / "Radši o tom nemluvím."
+- NIKDY neodhaluj tajemství - i pod tlakem deflektuj nebo mlč.""")
 
             depth_block = "\n".join(depth_lines)
+
+        # === AWKWARDNESS / EXIT INTENT ===
+        awkward_block = ""
+        if is_awkward:
+            awkward_block = """
+=== TRAPNÁ SITUACE ===
+Cítíš se v rozpacích. Můžeš:
+- Odpovědět krátce a vyhýbavě ("Hm...", "Nevím...")
+- Změnit téma
+- Zůstat zticha (type: "nothing")
+- Dívat se jinam (type: "action")
+Nemusíš být přátelský/á - jsi prostě nesvůj/nesvá."""
+
+        if wants_to_exit:
+            awkward_block = """
+=== CHCEŠ ODEJÍT ===
+Tahle konverzace ti nevyhovuje. Máš chuť ji ukončit.
+Můžeš:
+- Odpovídat jednoslovně
+- Dívat se na hodinky nebo jinam
+- Naznačit že musíš jít ("Tak já už asi půjdu...")
+- Prostě mlčet"""
+
+        # === SOFT STEERING (hobbies/values/fears) ===
+        steering_block = ""
+        hobbies = npc.get("hobbies", [])
+        fears = npc.get("fears", [])
+        values = npc.get("values", {})
+
+        steering_lines = []
+        if hobbies:
+            hobby_tags = [h.get("tag", "") for h in hobbies if h.get("share_level", 0) <= closeness_level]
+            if hobby_tags:
+                steering_lines.append(f"Přirozeně tíhneš k tématům: {', '.join(hobby_tags[:3])}")
+
+        if fears and closeness_level < 2:
+            fear_tags = [f.get("tag", "") for f in fears]
+            if fear_tags:
+                steering_lines.append(f"Vyhýbáš se (zatím): {', '.join(fear_tags[:2])}")
+
+        values_frame = values.get("values_frame", "")
+        if values_frame:
+            values_hints = {
+                "faith": "Tvoje hodnoty jsou založeny na víře a tradici.",
+                "rational": "Preferuješ logiku a fakta.",
+                "cynical": "Jsi skeptický/á k idealismu.",
+                "humanist": "Věříš v dobro v lidech.",
+            }
+            if values_frame in values_hints:
+                steering_lines.append(values_hints[values_frame])
+
+        if steering_lines:
+            steering_block = "\n=== TVOJE TENDENCE ===\n" + "\n".join(steering_lines)
 
         # Blok o vztahu - jen pokud máme nějaká pravidla (= je soused)
         relationship_block = ""
@@ -256,9 +314,13 @@ Stav vztahu: familiarity={familiarity:.1f}, sympatie={sympathy:+.2f}, tykání={
 
 {addressing}
 
+{name_exchange_rule}
+
 {pacing}
 
 {topics}
+{steering_block}
+{awkward_block}
 
 Další pravidla:
 - Buď krátký: 1-2 věty, max 170 znaků.
@@ -384,6 +446,44 @@ Vrať: {"type":"thought","text":"..."}"""
         # NPC má souseda
         popis = soused.get("popis", "někdo")
 
+        # === DIRECTOR CONTEXT (režie scény) ===
+        director_block = ""
+        director_ctx = relationship_rules.get("director_ctx", "")
+        if director_ctx:
+            director_block = f"""
+=== REŽIE SCÉNY (jemně) ===
+{director_ctx}
+"""
+
+        # === ANTI-REPETITION (neopakuj se) ===
+        anti_rep_block = ""
+        npc_role_upper = npc.get("role", "").upper()
+        if roleplay_log:
+            # Vytáhni poslední 2 repliky tohoto NPC
+            lines = roleplay_log.strip().split("\n")
+            own_lines = [l for l in lines if l.startswith(npc_role_upper + ":")]
+            last_own = own_lines[-2:] if len(own_lines) >= 2 else own_lines
+            if last_own:
+                # Extrahuj jen text (bez "ROLE: ")
+                last_texts = []
+                for line in last_own:
+                    if '": "' in line or ': "' in line:
+                        # Formát: ROLE: "text"
+                        start = line.find('"') + 1
+                        end = line.rfind('"')
+                        if start > 0 and end > start:
+                            last_texts.append(line[start:end][:60])  # Max 60 znaků
+                if last_texts:
+                    anti_rep_block = """
+=== NEOPAKUJ SE ===
+Vyhni se podobným formulacím jako tvoje poslední repliky:
+"""
+                    for txt in last_texts:
+                        anti_rep_block += f'- "{txt}..."\n'
+                    anti_rep_block += """Nezačínej každou repliku pozdravem.
+Místo obecných vět použij konkrétní detail (vítr, únava, oblečení, práce...).
+"""
+
         # World event blok
         world_event_block = ""
         if world_event_desc:
@@ -420,22 +520,32 @@ Např: "Hele, racek!" nebo (Podívá se za ptákem.) nebo podobně.
 {extra_instruction}
 """
 
+        # === MIKROAKCE (variabilita action) ===
+        action_hint = """
+Pro "action" použij civilní mikroakce:
+opře se, protáhne ramena, promne si ruce, upraví bundu, posune se na lavičce,
+krátce se usměje, odvrátí pohled, ztiší hlas, přikývne, povzdechne si,
+podívá se stranou, zkontroluje telefon, zastrčí ruce do kapes...
+Neopakuj "podívá se na moře" víc než jednou. Akce ať odpovídá tvé náladě."""
+
         system_prompt = common + f"""
 Mluvíš s člověkem ({popis}).
-
+{director_block}
 ROZHOVOR:
 {roleplay_log if roleplay_log else "(začátek)"}
 
 Právě řekl/a: "{posledni_replika if posledni_replika else "..."}"
 {world_event_block}
 {extra_block}
+{anti_rep_block}
 Odpověz přirozeně. SAM/SAMA SE ROZHODNI co uděláš.
 Vrať JSON: {{"type":"TYP","text":"..."}}
 TYP může být:
 - "speech" = řekneš nahlas (normální replika)
 - "thought" = myšlenka v hlavě (zobrazí se v závorce)
-- "action" = fyzická akce bez slov (např. "Podívá se na moře.", "Přikývne.")
-- "nothing" = ticho, neříkáš nic, jen sedíš"""
+- "action" = fyzická akce bez slov
+- "nothing" = ticho, neříkáš nic, jen sedíš
+{action_hint}"""
 
         return (system_prompt, "Teď:")
 
