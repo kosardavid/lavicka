@@ -41,9 +41,9 @@ class WorldEventGenerator:
 
     def __init__(
         self,
-        ambient_time_cooldown: float = 20.0,
-        ambient_turn_cooldown: int = 3,
-        ambient_chance: float = 0.15,
+        ambient_time_cooldown: float = 8.0,
+        ambient_turn_cooldown: int = 2,
+        ambient_chance: float = 0.45,
     ):
         """
         Args:

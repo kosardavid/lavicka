@@ -387,10 +387,29 @@ Vrať: {"type":"thought","text":"..."}"""
         # World event blok
         world_event_block = ""
         if world_event_desc:
-            world_event_block = f"""
-=== CO SE PRÁVĚ DĚJE ===
+            # Rozliš mezi SILENCE a skutečnými eventy
+            is_silence = "Ticho" in world_event_desc or "Prostor pro iniciativu" in world_event_desc
+            is_question = "Čeká se na odpověď" in world_event_desc
+
+            if is_silence:
+                world_event_block = f"""
+=== SITUACE ===
 {world_event_desc}
-Můžeš reagovat na tuto situaci, nebo ji ignorovat.
+"""
+            elif is_question:
+                world_event_block = f"""
+=== SITUACE ===
+{world_event_desc}
+ODPOVĚZ na otázku - neignoruj ji!
+"""
+            else:
+                # Skutečný ambient event - silnější instrukce
+                world_event_block = f"""
+=== CO SE PRÁVĚ STALO ===
+{world_event_desc}
+
+REAGUJ na tuto událost! Alespoň ji krátce zmíň nebo na ni reaguj akcí.
+Např: "Hele, racek!" nebo (Podívá se za ptákem.) nebo podobně.
 """
 
         # Extra instrukce (z ASSISTED módu)
