@@ -9,6 +9,17 @@ Sleduje:
 - Výměna jmen: jestli si řekli jména
 
 Nyní s persistencí - načítá data z vztahy.json při startu.
+
+Closeness Level (KROK 2):
+-------------------------
+Stupeň blízkosti vztahu určuje maximální hloubku témat.
+- 0 = cizinci (strangers)
+- 1 = známí (acquaintances)
+- 2 = blízcí (close)
+- 3 = intimní / láska (intimate)
+
+Closeness level omezuje, jak hluboce může NPC mluvit,
+ale není to jediný faktor - viz npc_depth.py pro allowed_depth.
 """
 
 import random
@@ -26,6 +37,43 @@ class Relationship:
         self.tykani: bool = False
         self.name_exchange: bool = False
         self.pending_tykani: Optional[dict] = None
+        # relationship_status: None, "friends", "in_love"
+        self.relationship_status: Optional[str] = None
+
+    def get_closeness_level(self) -> int:
+        """
+        Vypočítá closeness_level (stupeň blízkosti) z atributů vztahu.
+
+        Closeness level určuje maximální hloubku témat, o kterých může
+        NPC mluvit. I při vysoké blízkosti může být allowed_depth nižší
+        kvůli osobnosti NPC (viz npc_depth.py).
+
+        Pravidla:
+        - 0 = cizinci: familiarity < 5
+        - 1 = známí: familiarity >= 5, sympathy > 0
+        - 2 = blízcí: familiarity >= 12, sympathy >= 0.4, tykání
+        - 3 = intimní: relationship_status == "in_love" NEBO
+                       familiarity >= 20, sympathy >= 0.7, tykání
+
+        Returns:
+            int: 0-3 (cizinci, známí, blízcí, intimní)
+        """
+        # Intimní - milenci nebo velmi blízký vztah
+        if self.relationship_status == "in_love":
+            return 3
+        if self.familiarity >= 20 and self.sympathy >= 0.7 and self.tykani:
+            return 3
+
+        # Blízcí - tykají si a mají dobré sympatie
+        if self.familiarity >= 12 and self.sympathy >= 0.4 and self.tykani:
+            return 2
+
+        # Známí - trochu se znají a mají pozitivní sympatie
+        if self.familiarity >= 5 and self.sympathy > 0:
+            return 1
+
+        # Cizinci - default
+        return 0
 
     def to_dict(self) -> dict:
         """Převede na slovník."""
@@ -35,6 +83,7 @@ class Relationship:
             "tykani": self.tykani,
             "name_exchange": self.name_exchange,
             "pending_tykani": self.pending_tykani,
+            "closeness_level": self.get_closeness_level(),
         }
 
 
@@ -302,3 +351,15 @@ Příklad ŠPATNĚ: "Jak se máš?" "Co děláš?" "Líbí se ti tu?\""""
             return 0.35
         else:
             return 0.22
+
+    def get_closeness_level(self, npc_a, npc_b) -> int:
+        """
+        Vrátí closeness_level pro pár NPC.
+
+        Wrapper pro Relationship.get_closeness_level().
+
+        Returns:
+            int: 0-3 (cizinci, známí, blízcí, intimní)
+        """
+        vztah = self.get(npc_a, npc_b)
+        return vztah.get_closeness_level()

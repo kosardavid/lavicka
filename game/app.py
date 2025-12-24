@@ -155,6 +155,8 @@ class LavickaApp:
                     "familiarity": vztah.familiarity,
                     "sympathy": vztah.sympathy,
                     "tykani": vztah.tykani,
+                    # Closeness level pro depth systém
+                    "closeness_level": vztah.get_closeness_level(),
                 }
                 memory_context = vytvor_kontext_z_pameti(
                     self.pamet, npc['id'], soused['id'], vztah.familiarity
@@ -388,6 +390,8 @@ class LavickaApp:
                 "familiarity": vztah.familiarity,
                 "sympathy": vztah.sympathy,
                 "tykani": vztah.tykani,
+                # Closeness level pro depth systém
+                "closeness_level": vztah.get_closeness_level(),
             }
             memory_context = vytvor_kontext_z_pameti(
                 self.pamet, npc['id'], soused['id'], vztah.familiarity

@@ -15,7 +15,29 @@
       "konfliktnost": 0.1,
       "hloubavost": 0.5,
       "mluvnost": 0.6
-    }
+    },
+    "social": {
+      "openness": 0.7,
+      "emotion_talk": 0.6,
+      "privacy": 0.3
+    },
+    "values": {
+      "values_frame": "faith"
+    },
+    "bench": {
+      "motive": "resting",
+      "motive_share_level": 1
+    },
+    "hobbies": [
+      {"tag": "vaření", "importance": 0.8, "share_level": 0},
+      {"tag": "vnoučata", "importance": 0.9, "share_level": 1}
+    ],
+    "fears": [
+      {"tag": "samota", "intensity": 0.6, "share_level": 2}
+    ],
+    "secrets": [
+      {"tag": "manžel_alkoholik", "severity": 0.7, "policy": "share_if_intimacy", "min_intimacy": 3, "share_level": 3}
+    ]
   },
   "manazer_petr": {
     "id": "manazer_petr",
@@ -33,7 +55,29 @@
       "konfliktnost": 0.3,
       "hloubavost": 0.4,
       "mluvnost": 0.5
-    }
+    },
+    "social": {
+      "openness": 0.4,
+      "emotion_talk": 0.3,
+      "privacy": 0.7
+    },
+    "values": {
+      "values_frame": "rational"
+    },
+    "bench": {
+      "motive": "escaping",
+      "motive_share_level": 2
+    },
+    "hobbies": [
+      {"tag": "golf", "importance": 0.5, "share_level": 0},
+      {"tag": "investice", "importance": 0.7, "share_level": 1}
+    ],
+    "fears": [
+      {"tag": "selhání_v_kariéře", "intensity": 0.8, "share_level": 3}
+    ],
+    "secrets": [
+      {"tag": "vyhoření", "severity": 0.6, "policy": "share_if_intimacy", "min_intimacy": 2, "share_level": 2}
+    ]
   },
   "rebelka_adela": {
     "id": "rebelka_adela",
@@ -51,7 +95,29 @@
       "konfliktnost": 0.5,
       "hloubavost": 0.3,
       "mluvnost": 0.3
-    }
+    },
+    "social": {
+      "openness": 0.2,
+      "emotion_talk": 0.2,
+      "privacy": 0.9
+    },
+    "values": {
+      "values_frame": "cynical"
+    },
+    "bench": {
+      "motive": "escaping",
+      "motive_share_level": 3
+    },
+    "hobbies": [
+      {"tag": "hudba", "importance": 0.9, "share_level": 0},
+      {"tag": "umění", "importance": 0.6, "share_level": 1}
+    ],
+    "fears": [
+      {"tag": "být_jako_rodiče", "intensity": 0.7, "share_level": 3}
+    ],
+    "secrets": [
+      {"tag": "rozpad_rodiny", "severity": 0.8, "policy": "never_share", "share_level": 99}
+    ]
   },
   "delnik_franta": {
     "id": "delnik_franta",
@@ -70,7 +136,29 @@
       "konfliktnost": 0.2,
       "hloubavost": 0.2,
       "mluvnost": 0.7
-    }
+    },
+    "social": {
+      "openness": 0.8,
+      "emotion_talk": 0.3,
+      "privacy": 0.2
+    },
+    "values": {
+      "values_frame": "humanist"
+    },
+    "bench": {
+      "motive": "resting",
+      "motive_share_level": 0
+    },
+    "hobbies": [
+      {"tag": "fotbal", "importance": 0.7, "share_level": 0},
+      {"tag": "motorky", "importance": 0.6, "share_level": 0}
+    ],
+    "fears": [
+      {"tag": "ztráta_zdraví", "intensity": 0.5, "share_level": 2}
+    ],
+    "secrets": [
+      {"tag": "dluhy_syna", "severity": 0.5, "policy": "share_if_intimacy", "min_intimacy": 2, "share_level": 2}
+    ]
   },
   "bezdomovec_lojza": {
     "id": "bezdomovec_lojza",
@@ -89,6 +177,29 @@
       "konfliktnost": 0.1,
       "hloubavost": 0.8,
       "mluvnost": 0.4
-    }
+    },
+    "social": {
+      "openness": 0.6,
+      "emotion_talk": 0.7,
+      "privacy": 0.4
+    },
+    "values": {
+      "values_frame": "humanist"
+    },
+    "bench": {
+      "motive": "thinking",
+      "motive_share_level": 1
+    },
+    "hobbies": [
+      {"tag": "pozorování_lidí", "importance": 0.8, "share_level": 0},
+      {"tag": "filozofie", "importance": 0.7, "share_level": 0}
+    ],
+    "fears": [
+      {"tag": "zima", "intensity": 0.8, "share_level": 1},
+      {"tag": "zapomenutí", "intensity": 0.6, "share_level": 2}
+    ],
+    "secrets": [
+      {"tag": "bývalá_rodina", "severity": 0.9, "policy": "share_only_if_breakpoint", "share_level": 3}
+    ]
   }
 }

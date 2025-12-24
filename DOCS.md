@@ -128,7 +128,8 @@ lavicka/
 │   │
 │   ├── npc/                  # Modul postav
 │   │   ├── base.py           # Třída NPC
-│   │   └── archetypes.py     # Načítání postav z JSON
+│   │   ├── archetypes.py     # Načítání postav z JSON + fallback defaulty
+│   │   └── npc_depth.py      # Depth systém - allowed_depth, filtrování témat
 │   │
 │   ├── rules/                # Herní logika (fallback)
 │   │   ├── director.py       # Režisér scény
@@ -206,7 +207,29 @@ Každá postava je definována v JSON s těmito atributy:
       "konfliktnost": 0.1,
       "hloubavost": 0.5,
       "mluvnost": 0.6
-    }
+    },
+    "social": {
+      "openness": 0.7,
+      "emotion_talk": 0.6,
+      "privacy": 0.3
+    },
+    "values": {
+      "values_frame": "faith"
+    },
+    "bench": {
+      "motive": "resting",
+      "motive_share_level": 1
+    },
+    "hobbies": [
+      {"tag": "vaření", "importance": 0.8, "share_level": 0},
+      {"tag": "vnoučata", "importance": 0.9, "share_level": 1}
+    ],
+    "fears": [
+      {"tag": "samota", "intensity": 0.6, "share_level": 2}
+    ],
+    "secrets": [
+      {"tag": "manžel_alkoholik", "severity": 0.7, "policy": "share_if_intimacy", "min_intimacy": 3, "share_level": 3}
+    ]
   }
 }
 ```
@@ -236,11 +259,76 @@ Každá postava je definována v JSON s těmito atributy:
 | `hloubavost` | 0.0-1.0 | Tendence k hlubokým rozhovorům | Vyšší = delší, hlubší rozhovory |
 | `mluvnost` | 0.0-1.0 | Jak moc mluví | Nižší = více ticha |
 
+#### Social (sociální osobnost) - pro Depth systém
+
+| Atribut | Rozsah | Popis |
+|---------|--------|-------|
+| `openness` | 0.0-1.0 | Jak snadno sdílí osobní věci |
+| `emotion_talk` | 0.0-1.0 | Jak umí mluvit o emocích |
+| `privacy` | 0.0-1.0 | Jak silně si hlídá soukromí (>0.7 = penalizace) |
+
+#### Values (hodnoty)
+
+| Atribut | Hodnoty | Popis |
+|---------|---------|-------|
+| `values_frame` | `faith`, `rational`, `cynical`, `humanist` | Hodnotový rámec postavy |
+
+#### Bench (lavička)
+
+| Atribut | Typ | Popis |
+|---------|-----|-------|
+| `motive` | enum | Důvod proč je na lavičce: `resting`, `waiting`, `escaping`, `thinking`, `grieving`, `peoplewatching` |
+| `motive_share_level` | 0-3 | Od jaké hloubky vztahu smí říct důvod |
+
+#### Hobbies / Fears (koníčky / obavy)
+
+```json
+{"tag": "vaření", "importance": 0.8, "share_level": 0}
+```
+
+| Atribut | Typ | Popis |
+|---------|-----|-------|
+| `tag` | string | Identifikátor tématu |
+| `importance` | 0.0-1.0 | Důležitost pro postavu |
+| `share_level` | 0-3 | Od jaké hloubky smí NPC téma zmínit nahlas |
+
+#### Secrets (tajemství)
+
+```json
+{"tag": "manžel_alkoholik", "severity": 0.7, "policy": "share_if_intimacy", "min_intimacy": 3, "share_level": 3}
+```
+
+| Atribut | Typ | Popis |
+|---------|-----|-------|
+| `tag` | string | Identifikátor tajemství |
+| `severity` | 0.0-1.0 | Závažnost tajemství |
+| `policy` | enum | Pravidlo sdílení (viz níže) |
+| `min_intimacy` | int | Minimální closeness pro `share_if_intimacy` |
+| `share_level` | int | 3 nebo 99 (nikdy) |
+
+**Policy typy:**
+- `never_share` - nikdy nevyslovit nahlas
+- `share_if_intimacy` - sdílet jen při closeness >= min_intimacy
+- `share_only_if_breakpoint` - sdílet jen v klíčových momentech (goodbye, leaving, conflict_peak)
+
 #### Témata
 
 Pole `temata` obsahuje zájmy postavy. Při rozhovoru dvou NPC se náhodně kombinují témata obou a nabízí se AI jako inspirace.
 
 Příklad: Babička (`["vzpomínky", "rodina"]`) + Dělník (`["fotbal", "pivo"]`) → AI dostane mix: "Možná témata: rodina, fotbal, vzpomínky"
+
+#### Fallback defaulty
+
+Pokud archetyp nemá definované rozšířené položky (social, values, bench, hobbies, fears, secrets), použijí se automaticky tyto defaulty:
+
+```python
+DEFAULT_SOCIAL = {"openness": 0.5, "emotion_talk": 0.5, "privacy": 0.5}
+DEFAULT_VALUES = {"values_frame": "humanist"}
+DEFAULT_BENCH = {"motive": "resting", "motive_share_level": 1}
+DEFAULT_HOBBIES = []
+DEFAULT_FEARS = []
+DEFAULT_SECRETS = []
+```
 
 ---
 
@@ -650,7 +738,111 @@ else:
 
 ---
 
-### 4. RelationshipManager (rules/relationships.py)
+### 4. Depth Systém (npc/npc_depth.py)
+
+Systém pro realistické omezení hloubky rozhovorů NPC.
+
+#### Princip
+
+NPC nesmí mluvit hlouběji, než dovoluje kombinace:
+1. **Closeness level** - stupeň blízkosti vztahu (0-3)
+2. **Osobnost NPC** - openness, emotion_talk, privacy
+3. **Kontext** - bench motive, tajemství
+
+**I milenci (closeness 3) NESMÍ mluvit hluboce, pokud to osobnost nedovolí.**
+
+#### Closeness Level (stupeň blízkosti)
+
+Počítá se z atributů vztahu v `relationships.py`:
+
+| Level | Název | Podmínky |
+|-------|-------|----------|
+| 0 | cizinci | familiarity < 5 |
+| 1 | známí | familiarity >= 5, sympathy > 0 |
+| 2 | blízcí | familiarity >= 12, sympathy >= 0.4, tykání |
+| 3 | intimní | relationship_status == "in_love" NEBO familiarity >= 20, sympathy >= 0.7, tykání |
+
+#### Výpočet Allowed Depth
+
+```python
+def calculate_allowed_depth(closeness_level: int, social: dict) -> int:
+    # Převod osobnosti na buckety (1-3)
+    openness_bucket = _float_to_bucket(social["openness"])      # <0.35=1, <0.65=2, else=3
+    emotion_bucket = _float_to_bucket(social["emotion_talk"])
+    privacy_penalty = -1 if social["privacy"] > 0.7 else 0
+
+    # Výpočet
+    base = min(closeness_level, openness_bucket, emotion_bucket)
+    return clamp(base + privacy_penalty, 0, 3)
+```
+
+#### Příklady
+
+| NPC | Closeness | Openness | Emotion | Privacy | Allowed Depth |
+|-----|-----------|----------|---------|---------|---------------|
+| Babička Vlasta | 2 (blízcí) | 0.7 (3) | 0.6 (2) | 0.3 (0) | min(2,3,2)+0 = **2** |
+| Rebelka Adéla | 0 (cizinci) | 0.2 (1) | 0.2 (1) | 0.9 (-1) | min(0,1,1)-1 = **0** |
+| Manažer Petr | 1 (známí) | 0.4 (2) | 0.3 (1) | 0.7 (-1) | min(1,2,1)-1 = **0** |
+
+#### Filtrování témat
+
+Každé hobby/fear/secret má `share_level` (0-3). NPC může téma zmínit jen pokud:
+```
+allowed_depth >= share_level
+```
+
+#### Tajemství Policy
+
+| Policy | Pravidlo |
+|--------|----------|
+| `never_share` | Nikdy nevyslovit nahlas |
+| `share_if_intimacy` | Jen pokud closeness >= min_intimacy |
+| `share_only_if_breakpoint` | Jen při goodbye/leaving/conflict_peak |
+
+#### Bench Motive
+
+Důvod pobytu na lavičce se sdílí jen pokud:
+```
+allowed_depth >= motive_share_level
+```
+
+Jinak jen naznačit v chování nebo thought.
+
+#### Integrace do promptu
+
+Depth kontext se přidává do AI promptu jako instrukce:
+
+```
+=== HLOUBKA ROZHOVORU ===
+Vztah: známí (úroveň 1)
+Povolená hloubka témat: 1
+
+Důvod lavičky: odpočívám.
+Pokud to padne přirozeně, můžeš krátce zmínit.
+
+Můžeš zmínit: vaření, vnoučata
+NEŘÍKEJ nahlas: samota (příliš osobní)
+NIKDY NEŘÍKEJ: manžel_alkoholik
+
+PRAVIDLA HLOUBKY:
+- Nemluv o tématech hlubších než tvoje povolená hloubka.
+- Pokud téma není povoleno, použij thought (myšlenku) nebo mlč.
+- Některá tajemství NESMÍ být nikdy vyslovena - ani blízkým.
+- Mlčení je validní odpověď. Nemusíš vždy něco říct.
+```
+
+#### Klíčové soubory
+
+| Soubor | Popis |
+|--------|-------|
+| `npc/npc_depth.py` | Výpočty allowed_depth, filtrování témat |
+| `npc/archetypes.py` | Fallback defaulty pro social/bench/hobbies/fears/secrets |
+| `rules/relationships.py` | Výpočet closeness_level |
+| `ai/prompts.py` | Integrace depth kontextu do promptu |
+
+---
+
+### 5. RelationshipManager (rules/relationships.py)
 
 Spravuje vztahy mezi NPC v rámci session.
 
@@ -661,6 +853,10 @@ class Relationship:
     tykani: bool = False        # zda si tykají
     name_exchange: bool = False # zda si řekli jména
     pending_tykani: dict = None # probíhající návrh tykání
+    relationship_status: str = None  # None, "friends", "in_love"
+
+    def get_closeness_level(self) -> int:
+        """Vrací 0-3 (cizinci, známí, blízcí, intimní)"""
 ```
 
 #### Pravidla oslovování
@@ -998,6 +1194,7 @@ Director **nenutí**, jen **navádí**:
 ## Budoucí vylepšení
 
 - [x] Behavior Engine v1 - NPC rozhodují sami
+- [x] Depth systém - realistické omezení hloubky rozhovorů
 - [ ] Více archetypů postav
 - [ ] Denní/noční cyklus
 - [ ] Zvukové efekty
