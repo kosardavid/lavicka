@@ -1273,6 +1273,110 @@ Director **nenutí**, jen **navádí**:
 
 ---
 
+## NPC Registry (v3.8)
+
+Dynamická správa NPC na lavičce bez databáze.
+
+### Koncept
+
+```
+Registry drží:
+- available_npc_ids: všechna NPC z archetypes
+- active_npc_ids: NPC aktuálně na lavičce (max 2)
+- cooldown_npc_ids: NPC co nedávno odešli
+```
+
+### Použití
+
+```python
+from game.npc import get_registry, set_log_callback
+
+# Singleton instance
+registry = get_registry()
+
+# Aktivace NPC (přijde na lavičku)
+registry.activate("babicka_vlasta")
+
+# Deaktivace (odejde)
+registry.deactivate("babicka_vlasta", reason="goodbye")
+
+# Doplnění lavičky na 2 NPC
+npc_id = registry.fill(target=2)
+
+# Debug info
+print(registry.get_debug_info())
+```
+
+### Integrace s app.py
+
+```python
+# V _zpracuj_prichody():
+npc_id = self.registry.fill(target=2)
+if npc_id:
+    self._pridej_npc_by_id(seat_index, npc_id)
+
+# V _odejdi_npc():
+self.registry.deactivate(npc_id, reason=reason)
+```
+
+---
+
+## Filmový styl (v3.8)
+
+Úprava chování pro "filmový" zážitek - méně akcí, více ticha.
+
+### Principy
+
+1. **NOTHING jako default** - ticho je nejčastější výsledek
+2. **ACTION jen s důvodem** - max 1-2x za sebou, pak force NOTHING
+3. **Dialog s účelem** - jen když je důvod (otázka, impulz, změna vztahu)
+4. **Bez repetice** - opakovaný text → downgrade na NOTHING
+
+### Implementace v BehaviorEngine
+
+```python
+# Tracking per NPC
+self._consecutive_action_count: Dict[str, int] = {}
+self._last_action_texts: Dict[str, List[str]] = {}
+
+# Helper metody
+def _record_action(npc_id, text):
+    """Zaznamenává ACTION pro limit tracking."""
+
+def _reset_action_streak(npc_id):
+    """Resetuje counter po SPEECH/NOTHING."""
+
+def _should_force_nothing_after_actions(npc_id) -> bool:
+    """True pokud NPC udělalo 2+ ACTION za sebou."""
+
+def _would_action_repeat(npc_id, text) -> bool:
+    """True pokud by text byl repetice."""
+```
+
+### Změny fallback logiky
+
+| Situace | Staré chování | Nové (filmový styl) |
+|---------|---------------|---------------------|
+| Permission denied | ACTION/NOTHING | vždy NOTHING |
+| Max consecutive speaker | ACTION | NOTHING |
+| 2+ ACTION za sebou | - | force NOTHING |
+| Hard duplicate reject | ACTION | NOTHING |
+| Anti-rep downgrade_to_action | ACTION | NOTHING |
+
+### Příklad chování
+
+```
+Tah 1: Franta - SPEECH "Dneska je hezky"
+Tah 2: Vlasta - SPEECH "Jo, příjemný počasí"
+Tah 3: [Permission denied] → NOTHING (ticho)
+Tah 4: Franta - ACTION "Podívá se na moře"
+Tah 5: Vlasta - ACTION "Přikývne"
+Tah 6: [Max consecutive action] → NOTHING (force ticho)
+Tah 7: Franta - SPEECH "Chodíte sem často?"
+```
+
+---
+
 ## Známé limitace
 
 1. **Lokální model může ignorovat instrukce** - menší modely (Qwen 2.5) občas ignorují pravidla vykání
@@ -1290,6 +1394,8 @@ Director **nenutí**, jen **navádí**:
 - [x] Director propagation - režie scény propagována do promptu (v3.7)
 - [x] Anti-repetition instrukce - prevence opakování v promptu (v3.7)
 - [x] Mikroakce variabilita - civilní akce pro typ "action" (v3.7)
+- [x] NPC Registry - dynamická správa NPC bez DB (v3.8)
+- [x] Filmový styl - NOTHING jako default, omezení ACTION (v3.8)
 - [ ] Více archetypů postav
 - [ ] Denní/noční cyklus
 - [ ] Zvukové efekty

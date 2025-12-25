@@ -28,7 +28,7 @@ from .settings import (
     BEHAVIOR_MIN_SCORE_TO_SPEAK,
     DEV_INTENT_LOG_ENABLED,
 )
-from .npc import ARCHETYPY, get_available_archetypes
+from .npc import ARCHETYPY, get_available_archetypes, get_registry, set_log_callback
 from .rules import RelationshipManager, EventManager, Director
 from .ai import AIClient
 from .memory import get_pamet, vytvor_kontext_z_pameti
@@ -79,6 +79,10 @@ class LavickaApp:
             energy_regen_turn=BEHAVIOR_ENERGY_REGEN_TURN,
             min_score_to_speak=BEHAVIOR_MIN_SCORE_TO_SPEAK,
         )
+
+        # NPC Registry
+        self.registry = get_registry()
+        set_log_callback(safe_print)  # Registry loguje přes safe_print
 
         # Řízení
         self.ai_mysli = False
@@ -367,11 +371,15 @@ class LavickaApp:
         self._zpracuj_odpoved(npc, soused, resp, idx)
 
     def _zpracuj_prichody(self):
-        """Zpracuje náhodné příchody NPC."""
+        """Zpracuje náhodné příchody NPC pomocí registry."""
+        # Použij registry.fill() pro doplnění lavičky
         for i in range(2):
             if self.sedadla[i] is None:
                 if random.random() < PRAVDEPODOBNOST_PRICHODU:
-                    self._pridej_npc(i)
+                    # Registry vybere NPC
+                    npc_id = self.registry.fill(target=2)
+                    if npc_id:
+                        self._pridej_npc_by_id(i, npc_id)
 
     def _zpracuj_odchody(self):
         """Zpracuje odchody NPC."""
@@ -388,9 +396,9 @@ class LavickaApp:
                     npc['chce_odejit'] = True
 
             if npc.get('chce_odejit', False):
-                self._odejdi_npc(i)
+                self._odejdi_npc(i, reason="goodbye")
             elif je_sam and random.random() < PRAVDEPODOBNOST_ODCHODU_SAM:
-                self._odejdi_npc(i)
+                self._odejdi_npc(i, reason="alone")
 
     def _should_speak(self, obsazeno: list, forced_event) -> bool:
         """Rozhodne jestli někdo promluví."""
@@ -570,7 +578,7 @@ class LavickaApp:
     # === NPC MANAGEMENT ===
 
     def _pridej_npc(self, seat_index: int):
-        """Přidá nové NPC na sedadlo."""
+        """Přidá nové NPC na sedadlo (legacy - bez registry)."""
         # Zjisti kdo už sedí
         exclude = [s['id'] for s in self.sedadla if s]
         dostupne = get_available_archetypes(exclude)
@@ -579,6 +587,15 @@ class LavickaApp:
             return
 
         archetype = random.choice(dostupne)
+        self._pridej_npc_by_id(seat_index, archetype['id'])
+
+    def _pridej_npc_by_id(self, seat_index: int, npc_id: str):
+        """Přidá NPC na sedadlo podle ID (používá registry)."""
+        # Získej data NPC z registry
+        archetype = self.registry.get_npc_data(npc_id)
+        if not archetype:
+            return
+
         npc = archetype.copy()
         npc['chce_odejit'] = False
         npc['intent'] = "Chce si na chvíli odpočinout a užít moře."
@@ -605,11 +622,13 @@ class LavickaApp:
                 self.behavior_engine.start_scene(npc, soused)
                 safe_print(f"[ENGINE] Scéna zahájena: {npc['role']} + {soused['role']}")
 
-    def _odejdi_npc(self, seat_index: int):
-        """Odebere NPC ze sedadla."""
+    def _odejdi_npc(self, seat_index: int, reason: str = "unknown"):
+        """Odebere NPC ze sedadla a deaktivuje v registry."""
         npc = self.sedadla[seat_index]
         if not npc:
             return
+
+        npc_id = npc.get('id', '')
 
         # Uložit paměť před odchodem
         soused = self.sedadla[1 - seat_index]
@@ -620,6 +639,9 @@ class LavickaApp:
         with self._lock:
             self.sedadla[seat_index] = None
         safe_print(f"[NPC] Odešel: {npc['role']}")
+
+        # Deaktivuj v registry
+        self.registry.deactivate(npc_id, reason=reason)
 
         # Ukončit scénu
         if self.director.is_active():

@@ -109,6 +109,12 @@ class BehaviorEngine:
         self.max_consecutive_speaker = 2
         self._consecutive_speaker_count = 0
 
+        # === FILMOVÝ STYL ===
+        # Tracking po sobě jdoucích ACTION per NPC (pro limit 2x ACTION -> NOTHING)
+        self._consecutive_action_count: Dict[str, int] = {}
+        # Tracking posledních action textů per NPC (pro detekci repetice)
+        self._last_action_texts: Dict[str, List[str]] = {}
+
     # === HELPERS ===
 
     def _get_last_text_from_history(self) -> str:
@@ -156,6 +162,34 @@ class BehaviorEngine:
             if entry.get("npc_id") == npc_id and entry.get("type") == "speech":
                 return entry.get("text", "")
         return None
+
+    # === FILMOVÝ STYL HELPERS ===
+
+    def _record_action(self, npc_id: str, action_text: str) -> None:
+        """Zaznamenává ACTION pro filmový tracking."""
+        # Inkrementuj consecutive action count
+        self._consecutive_action_count[npc_id] = self._consecutive_action_count.get(npc_id, 0) + 1
+
+        # Zaznamenej text akce (max 5 posledních)
+        if npc_id not in self._last_action_texts:
+            self._last_action_texts[npc_id] = []
+        self._last_action_texts[npc_id].append(self._normalize_text(action_text))
+        if len(self._last_action_texts[npc_id]) > 5:
+            self._last_action_texts[npc_id].pop(0)
+
+    def _reset_action_streak(self, npc_id: str) -> None:
+        """Resetuje consecutive action count (po SPEECH nebo NOTHING)."""
+        self._consecutive_action_count[npc_id] = 0
+
+    def _should_force_nothing_after_actions(self, npc_id: str) -> bool:
+        """Vrátí True pokud NPC udělalo 2+ ACTION za sebou a mělo by být NOTHING."""
+        return self._consecutive_action_count.get(npc_id, 0) >= 2
+
+    def _would_action_repeat(self, npc_id: str, action_text: str) -> bool:
+        """Vrátí True pokud by action_text byl repetice nedávné akce."""
+        normalized = self._normalize_text(action_text)
+        recent = self._last_action_texts.get(npc_id, [])
+        return normalized in recent
 
     # === LIFECYCLE ===
 
@@ -208,6 +242,10 @@ class BehaviorEngine:
         # Vyčisti anti-repetition
         self.anti_rep.clear()
 
+        # Vyčisti filmový tracking
+        self._consecutive_action_count.clear()
+        self._last_action_texts.clear()
+
     def end_scene(self) -> None:
         """Ukončí aktuální scénu."""
         _log("END_SCENE", {
@@ -223,6 +261,8 @@ class BehaviorEngine:
         self._assisted_active = False
         self._history = []
         self._consecutive_speaker_count = 0
+        self._consecutive_action_count.clear()
+        self._last_action_texts.clear()
 
     # === MAIN PROCESSING ===
 
@@ -377,53 +417,58 @@ class BehaviorEngine:
 
                 # === PERMISSION GATE ===
                 # Pokud NPC nemá "sociální povolení" mluvit, přeskoč AI call
+                # FILMOVÝ STYL: vždy NOTHING, ne ACTION
                 if state and state.engagement_drive < 0.25 and state.speak_drive < 0.65:
                     _log("PERMISSION_DENIED", {
                         "npc_id": npc_id,
                         "engagement_drive": state.engagement_drive,
                         "speak_drive": state.speak_drive,
+                        "result": "NOTHING (filmový styl)",
                     })
 
-                    # Místo AI call vrátíme NOTHING nebo ACTION/THOUGHT
-                    if state.speak_drive > 0.45:
-                        generic_actions = [
-                            "Pozoruje okolí.",
-                            "Zamyšleně se dívá na moře.",
-                            "Pousměje se.",
-                        ]
-                        response = NPCResponse(
-                            npc_id=npc_id,
-                            response_type=ResponseType.ACTION,
-                            text=random.choice(generic_actions),
-                        )
-                    else:
-                        response = NPCResponse(
-                            npc_id=npc_id,
-                            response_type=ResponseType.NOTHING,
-                        )
+                    # FILMOVÝ STYL: vždy NOTHING místo ACTION
+                    response = NPCResponse(
+                        npc_id=npc_id,
+                        response_type=ResponseType.NOTHING,
+                    )
+                    self._reset_action_streak(npc_id)
 
                     result = self._process_response(response, world_event)
                     break  # Konec smyčky, jdeme na společný on_turn_end()
 
                 # === MAX CONSECUTIVE SPEAKER CHECK ===
-                # Pokud tento NPC už mluvil 2x za sebou, přeskoč na ACTION
+                # Pokud tento NPC už mluvil 2x za sebou -> NOTHING (filmový styl)
                 if self._last_speaker_id == npc_id and self._consecutive_speaker_count >= self.max_consecutive_speaker:
                     _log("MAX_CONSECUTIVE_SPEAKER", {
                         "npc_id": npc_id,
                         "consecutive_count": self._consecutive_speaker_count,
                         "max_allowed": self.max_consecutive_speaker,
+                        "result": "NOTHING (filmový styl)",
                     })
 
-                    generic_actions = [
-                        "Chvíli mlčí a pozoruje okolí.",
-                        "Zamyšleně se dívá na moře.",
-                        "Nechává prostor druhému.",
-                    ]
+                    # FILMOVÝ STYL: NOTHING místo ACTION
                     response = NPCResponse(
                         npc_id=npc_id,
-                        response_type=ResponseType.ACTION,
-                        text=random.choice(generic_actions),
+                        response_type=ResponseType.NOTHING,
                     )
+                    self._reset_action_streak(npc_id)
+                    result = self._process_response(response, world_event)
+                    break  # Konec smyčky, jdeme na společný on_turn_end()
+
+                # === FILMOVÝ STYL: MAX CONSECUTIVE ACTION CHECK ===
+                # Pokud NPC udělalo 2+ ACTION za sebou -> force NOTHING
+                if self._should_force_nothing_after_actions(npc_id):
+                    _log("MAX_CONSECUTIVE_ACTION", {
+                        "npc_id": npc_id,
+                        "consecutive_actions": self._consecutive_action_count.get(npc_id, 0),
+                        "result": "NOTHING (filmový styl)",
+                    })
+
+                    response = NPCResponse(
+                        npc_id=npc_id,
+                        response_type=ResponseType.NOTHING,
+                    )
+                    self._reset_action_streak(npc_id)
                     result = self._process_response(response, world_event)
                     break  # Konec smyčky, jdeme na společný on_turn_end()
 
@@ -486,24 +531,16 @@ class BehaviorEngine:
                         "npc_id": npc_id,
                         "text_preview": response.text[:50] if response.text else "",
                         "normalized": normalized_new[:50] if normalized_new else "",
-                        "action": "downgrade_to_action",
+                        "action": "downgrade_to_nothing (filmový styl)",
                     })
-                    # Reject -> vrať ACTION místo NOTHING (aby něco dělal)
-                    generic_actions = [
-                        "Podívá se na moře.",
-                        "Zamyšleně přikývne.",
-                        "Pozoruje okolí.",
-                    ]
+                    # FILMOVÝ STYL: Reject -> vrať NOTHING místo ACTION
                     response = NPCResponse(
                         npc_id=npc_id,
-                        response_type=ResponseType.ACTION,
-                        text=random.choice(generic_actions)
+                        response_type=ResponseType.NOTHING,
                     )
-                    # Přidej do historie a vrať
-                    self._append_to_history(npc_id, "action", response.text)
-                    self._scene_context.on_action()
-                    if state:
-                        state.on_acted(self._scene_context.turn_number)
+                    self._append_to_history(None, "nothing", "")
+                    self._scene_context.on_nothing()
+                    self._reset_action_streak(npc_id)
                     return response
 
             # Post-check anti-repetition (PŘED záznamem, aby se nepenalizoval sám sebou)
@@ -535,20 +572,13 @@ class BehaviorEngine:
                 # Pokračuj zpracováním jako thought
 
             elif rejection_action == "downgrade_to_action":
-                # Downgrade na akci - generuj obecnou akci
-                _log("ANTI_REP_DOWNGRADE", {"npc_id": npc_id, "action": "action"})
-                generic_actions = [
-                    "Podívá se na moře.",
-                    "Zamyšleně přikývne.",
-                    "Pozoruje okolí.",
-                    "Pousměje se.",
-                ]
+                # FILMOVÝ STYL: Downgrade na NOTHING místo action
+                _log("ANTI_REP_DOWNGRADE", {"npc_id": npc_id, "action": "nothing (filmový styl)"})
                 response = NPCResponse(
                     npc_id=npc_id,
-                    response_type=ResponseType.ACTION,
-                    text=random.choice(generic_actions)
+                    response_type=ResponseType.NOTHING,
                 )
-                # Pokračuj zpracováním jako action
+                # Pokračuj zpracováním jako nothing
 
         # Zpracuj podle finálního typu
         if response.is_speech():
@@ -581,6 +611,9 @@ class BehaviorEngine:
             self._last_speaker_id = npc_id
             self._last_response_text = response.text
 
+            # FILMOVÝ STYL: SPEECH resetuje action streak
+            self._reset_action_streak(npc_id)
+
         elif response.response_type == ResponseType.THOUGHT:
             # Myšlenka - menší aktivita
             self._append_to_history(npc_id, "thought", response.text)
@@ -590,6 +623,8 @@ class BehaviorEngine:
             # OPRAVA: THOUGHT není speech -> resetuj consecutive counter
             self._last_speaker_id = None
             self._consecutive_speaker_count = 0
+            # FILMOVÝ STYL: THOUGHT je jako ACTION pro účely limitu
+            self._record_action(npc_id, response.text)
 
         elif response.response_type == ResponseType.ACTION:
             # Akce - střední aktivita
@@ -600,6 +635,8 @@ class BehaviorEngine:
             # OPRAVA: ACTION není speech -> resetuj consecutive counter
             self._last_speaker_id = None
             self._consecutive_speaker_count = 0
+            # FILMOVÝ STYL: Zaznamenej ACTION pro tracking
+            self._record_action(npc_id, response.text)
 
         elif response.response_type == ResponseType.NOTHING:
             # Úplná nečinnost - NPC nic nedělá, NENÍ to akce
@@ -610,6 +647,8 @@ class BehaviorEngine:
             # OPRAVA: NOTHING není speech -> resetuj consecutive counter
             self._last_speaker_id = None
             self._consecutive_speaker_count = 0
+            # FILMOVÝ STYL: NOTHING resetuje action streak
+            self._reset_action_streak(npc_id)
 
         elif response.is_leaving():
             # Goodbye - NPC chce odejít (speech + odchod)
